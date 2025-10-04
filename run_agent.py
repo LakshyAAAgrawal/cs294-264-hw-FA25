@@ -65,9 +65,8 @@ def process_instance(
             env.delete_lines,
             env.git_diff,
             env.check_syntax,
-            env.validate_patch,
         ])
-        
+
         # Run the agent
         output = agent.run(task, max_steps) 
         
