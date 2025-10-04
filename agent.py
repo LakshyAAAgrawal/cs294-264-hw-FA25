@@ -490,10 +490,28 @@ Take a different approach now. Make a simple, safe action."""
                     
                     # Get the function
                     func = self.function_map[function_name]
-                    
-                    # Execute the tool
+
+                    # Sanitize arguments against function signature to avoid unexpected keyword errors
                     try:
-                        result = func(**arguments)
+                        sig = inspect.signature(func)
+                        param_map = sig.parameters
+                        # keep only accepted kwargs
+                        filtered_args = {k: v for k, v in arguments.items() if k in param_map}
+                        # detect missing required parameters
+                        missing = []
+                        for name, p in param_map.items():
+                            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                                if p.default is inspect._empty and name not in filtered_args:
+                                    missing.append(name)
+                        if missing:
+                            error_msg = f"Error: Missing required arguments for {function_name}: {missing}. Use the exact tool signature {func.__name__}{sig}."
+                            self.add_message("tool", error_msg)
+                            if self.detect_error_loop("function_call_missing_args", error_msg):
+                                if self.perform_recovery(step):
+                                    continue
+                            continue
+                        # Execute the tool
+                        result = func(**filtered_args)
                         
                         # If finish was called, return the result
                         if function_name == "finish":
@@ -501,6 +519,22 @@ Take a different approach now. Make a simple, safe action."""
                             if "diff --git" not in oo:
                                 # The agent has not actually mande any code changes. Add error message
                                 error_msg = "Error: finish() must be called only after making code changes. You must use the file edit tools to make changes to the codebase to resolve the issue. After making changes, you must call finish() to indicate that the task has been completed."
+                                self.add_message("tool", error_msg)
+                                continue
+
+                            # Additional guard: ensure repository has no Python syntax errors before finishing
+                            repo_syntax_checker = self.function_map["check_repo_syntax"]
+                            try:
+                                syntax_report = repo_syntax_checker()
+                            except Exception as e:
+                                syntax_report = None
+                            # Expect formats from envs.SWEEnvironment.check_repo_syntax
+                            if isinstance(syntax_report, str) and (syntax_report.strip().startswith("✗") or "Syntax errors detected" in syntax_report):
+                                # Surface the filepaths and error messages to the transcript and continue
+                                error_msg = (
+                                    "Error: Repository has Python syntax errors. Fix these before calling finish().\n\n"
+                                    + syntax_report
+                                )
                                 self.add_message("tool", error_msg)
                                 continue
 

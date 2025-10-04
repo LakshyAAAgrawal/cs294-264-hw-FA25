@@ -149,8 +149,12 @@ class SWEEnvironment:
                 # Move temp file to target location in container
                 self.env.execute(f"cp {container_temp_path} {file_path}")
                 self.env.execute(f"rm -f {container_temp_path}")
-                
-                return f"Successfully replaced lines {from_line}-{to_line} in {file_path}. Replaced {to_line-from_line+1} lines with {len(content_lines)} lines."
+
+                msg = (
+                    f"Successfully replaced lines {from_line}-{to_line} in {file_path}. "
+                    f"Replaced {to_line-from_line+1} lines with {len(content_lines)} lines."
+                )
+                return self._append_syntax_warning_if_needed(file_path, msg)
             
             finally:
                 # Always clean up host temp file
@@ -193,19 +197,22 @@ class SWEEnvironment:
         except Exception as e:
             return f"Error reading file: {str(e)}"
     
-    def search_in_file(self, file_path: str, pattern: str) -> str:
+    def search_in_file(self, file_path: str, pattern: str, use_regex: bool = True) -> str:
         """
         Search for a pattern in a file and return matching lines with line numbers.
         
         Args:
             file_path (str): path to the file to search
             pattern (str): pattern to search for
+            use_regex (bool): if False, treat the pattern as a fixed string
         
         Returns:
             Matching lines with line numbers
         """
         try:
-            cmd = f"grep -n '{pattern}' {file_path}"
+            esc = pattern.replace("'", "'\\''")
+            fixed_flag = "-F" if not use_regex else ""
+            cmd = f"grep {fixed_flag} -n '{esc}' {file_path}"
             output = self.env.execute(cmd)
             return output['output']
         except Exception as e:
@@ -247,34 +254,37 @@ class SWEEnvironment:
         except Exception as e:
             return f"Error finding files: {str(e)}"
     
-    def search_in_directory(self, pattern: str, directory: str = ".") -> str:
+    def search_in_directory(self, pattern: str, directory: str = ".", use_regex: bool = True) -> str:
         """
         Search for a pattern in all files in a directory recursively.
         
         Args:
             pattern (str): pattern to search for
             directory (str): directory to search in (default: current directory)
+            use_regex (bool): if False, treat the pattern as a fixed string
         
         Returns:
             Matching lines with file names and line numbers
         """
         try:
-            cmd = f"grep -rn '{pattern}' {directory}"
+            esc = pattern.replace("'", "'\\''")
+            fixed_flag = "-F" if not use_regex else ""
+            cmd = f"grep {fixed_flag} -rn '{esc}' {directory}"
             output = self.env.execute(cmd)
             return output['output']
         except Exception as e:
             # grep returns non-zero when no matches found
             return f"No matches found or error: {str(e)}"
     
-    def get_file_content(self, file_path: str) -> str:
-        """
-        Return the entire content of the file as a string.
-        """
-        try:
-            output = self.env.execute(f"cat {file_path}")
-            return output['output']
-        except Exception as e:
-            return f"Error reading file: {str(e)}"
+    # def get_file_content(self, file_path: str) -> str:
+    #     """
+    #     Return the entire content of the file as a string.
+    #     """
+    #     try:
+    #         output = self.env.execute(f"cat {file_path}")
+    #         return output['output']
+    #     except Exception as e:
+    #         return f"Error reading file: {str(e)}"
 
     def set_file_content(self, file_path: str, content: str) -> str:
         """
@@ -285,12 +295,21 @@ class SWEEnvironment:
             encoded = base64.b64encode(content.encode()).decode()
             cmd = f"echo '{encoded}' | base64 -d > {file_path}"
             self.env.execute(cmd)
-            return f"Successfully wrote to {file_path}"
+            msg = f"Successfully wrote to {file_path}"
+            return self._append_syntax_warning_if_needed(file_path, msg)
         except Exception as e:
             # Fallback for large content: Write to temp and mv
             temp_path = "/tmp/temp_content"
-            self.env.execute(f"echo '{encoded}' | base64 -d > {temp_path} && mv {temp_path} {file_path}")
-            return f"Successfully wrote to {file_path}"
+            try:
+                import base64
+                encoded = base64.b64encode(content.encode()).decode()
+                self.env.execute(f"echo '{encoded}' | base64 -d > {temp_path} && mv {temp_path} {file_path}")
+            except Exception:
+                # last resort: write via printf to avoid base64 issues
+                safe = content.replace("'", "'\\''")
+                self.env.execute(f"printf '%s' '{safe}' > {file_path}")
+            msg = f"Successfully wrote to {file_path}"
+            return self._append_syntax_warning_if_needed(file_path, msg)
 
     def regex_replace_in_file(self, file_path: str, pattern: str, replacement: str, use_regex: bool = True) -> str:
         """
@@ -302,9 +321,74 @@ class SWEEnvironment:
             flag = "-E" if use_regex else ""
             cmd = f"sed -i {flag} 's/{esc_pattern}/{esc_repl}/g' {file_path}"
             self.env.execute(cmd)
-            return f"Successfully replaced in {file_path}"
+            msg = f"Successfully replaced in {file_path}"
+            return self._append_syntax_warning_if_needed(file_path, msg)
         except Exception as e:
             return f"Error: {str(e)}"
+
+    def replace_between(self, file_path: str, start_pattern: str, end_pattern: str, content: str,
+                        use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str:
+        """
+        Replace the text between the first match of start_pattern and the first match of end_pattern.
+        Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+        Args:
+            file_path: File to edit
+            start_pattern: Anchor marking the start of the region
+            end_pattern: Anchor marking the end of the region (searched after start)
+            content: Replacement text for the region
+            use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+            include_start: If True, the start anchor is also replaced
+            include_end: If True, the end anchor is also replaced
+
+        Returns:
+            Summary string describing the change, or error message
+        """
+        try:
+            # Read file
+            read_output_d = self.env.execute(f"cat {file_path}")
+            text = read_output_d['output']
+            lines = text.split('\n')
+
+            import re
+            def find_index(pattern: str, start: int = 0) -> int:
+                if use_regex:
+                    for idx in range(start, len(lines)):
+                        if re.search(pattern, lines[idx]):
+                            return idx
+                    return -1
+                else:
+                    return next((i for i in range(start, len(lines)) if pattern in lines[i]), -1)
+
+            start_idx = find_index(start_pattern, 0)
+            if start_idx == -1:
+                return f"Error: start_pattern not found in {file_path}"
+            end_idx = find_index(end_pattern, start_idx + 1)
+            if end_idx == -1:
+                return f"Error: end_pattern not found in {file_path}"
+
+            replace_from = start_idx if include_start else start_idx + 1
+            replace_to = end_idx if include_end else end_idx
+            if replace_from > replace_to:
+                return "Error: Computed replace range is invalid (check include_start/include_end)."
+
+            # Preserve indentation of the line at replace_from (best-effort)
+            indent = 0
+            if 0 <= replace_from < len(lines):
+                ref = lines[replace_from]
+                indent = len(ref) - len(ref.lstrip(' \t'))
+            adjusted = '\n'.join(((' ' * indent) + l if l else l) for l in content.split('\n'))
+
+            new_lines = lines[:replace_from] + adjusted.split('\n') + lines[replace_to:]
+            new_text = '\n'.join(new_lines)
+
+            msg = self.set_file_content(file_path, new_text)
+            # set_file_content already appends syntax warnings if needed
+            return msg
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"Error in replace_between: {str(e)}"
 
     def insert_lines_at(self, file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str:
         """
@@ -321,7 +405,8 @@ class SWEEnvironment:
             encoded = base64.b64encode(content.encode()).decode()
             cmd = f"sed -i '{line_num}i $(echo '{encoded}' | base64 -d)' {file_path}"
             self.env.execute(cmd)
-            return "Success"
+            msg = f"Successfully inserted content at line {line_num} in {file_path}"
+            return self._append_syntax_warning_if_needed(file_path, msg)
         except Exception as e:
             return f"Error: {str(e)}"
 
@@ -332,7 +417,8 @@ class SWEEnvironment:
         try:
             cmd = f"sed -i '{from_line},{to_line}d' {file_path}"
             self.env.execute(cmd)
-            return "Success"
+            msg = f"Successfully deleted lines {from_line}-{to_line} in {file_path}"
+            return self._append_syntax_warning_if_needed(file_path, msg)
         except Exception as e:
             return f"Error: {str(e)}"
 
@@ -447,6 +533,88 @@ class SWEEnvironment:
                     return f"✗ Syntax error in {file_path}:\n{result['output']}"
             except Exception as e2:
                 return f"Could not check syntax: {str(e)}"
+
+    def list_modified_python_files(self) -> str:
+        """
+        List modified (unstaged) Python files according to git.
+        """
+        try:
+            out = self.env.execute("git diff --name-only -- '*.py'")
+            return out['output'] or ""
+        except Exception as e:
+            return f"Error listing modified files: {str(e)}"
+
+    def check_repo_syntax(self) -> str:
+        """
+        Check syntax for all modified Python files (according to git). If none modified, checks all tracked Python files.
+        """
+        try:
+            files_out = self.env.execute("git diff --name-only -- '*.py'")
+            files = [f.strip() for f in files_out['output'].split('\n') if f.strip()]
+            if not files:
+                files_out = self.env.execute("git ls-files -- '*.py'")
+                files = [f.strip() for f in files_out['output'].split('\n') if f.strip()]
+            if not files:
+                return "No Python files to check."
+            errors = []
+            for f in files:
+                res = self.env.execute(f"python3 -m py_compile {f}")
+                if res['exit_code'] != 0:
+                    errors.append(f"{f}:\n{res['output']}")
+            if errors:
+                return "✗ Syntax errors detected:\n\n" + "\n\n".join(errors)
+            return "✓ All checked Python files have valid syntax"
+        except Exception as e:
+            return f"Error during repository syntax check: {str(e)}"
+
+    def git_apply(self, patch: str) -> str:
+        """
+        Apply a unified diff patch string using git apply.
+
+        Returns success or stderr on failure.
+        """
+        try:
+            import base64
+            encoded = base64.b64encode(patch.encode()).decode()
+            result = self.env.execute("bash -lc \"base64 -d <<< '%s' | git apply -p0 -v -\"" % encoded)
+            if result.get('exit_code', 0) == 0:
+                # After applying a patch, check syntax of modified Python files
+                try:
+                    files_out = self.env.execute("git diff --name-only -- '*.py'")
+                    files = [f.strip() for f in files_out.get('output', '').split('\n') if f.strip()]
+                except Exception:
+                    files = []
+                warnings = []
+                for f in files:
+                    try:
+                        syntax = self.check_syntax(f)
+                        if syntax.strip().startswith('✗') or 'Syntax error' in syntax:
+                            warnings.append(f"{f}:\n{syntax}")
+                    except Exception:
+                        continue
+                if warnings:
+                    return "Patch applied successfully\n\nWarnings (syntax errors detected):\n\n" + "\n\n".join(warnings)
+                return "Patch applied successfully"
+            return result.get('output', 'git apply returned a non-zero exit code')
+        except Exception as e:
+            return f"Error applying patch: {str(e)}"
+
+    def _append_syntax_warning_if_needed(self, file_path: str, base_message: str) -> str:
+        """
+        Append a small warning with syntax errors for Python files, if any.
+
+        This runs a quick syntax check for `.py` files and, when errors are
+        detected, appends a concise warning that includes the actual error.
+        """
+        try:
+            if isinstance(file_path, str) and file_path.endswith('.py'):
+                syntax = self.check_syntax(file_path)
+                if isinstance(syntax, str) and (syntax.strip().startswith('✗') or 'Syntax error' in syntax):
+                    return f"{base_message}\n\nWarning: syntax errors detected in {file_path}:\n{syntax}"
+        except Exception:
+            # Do not block main operation on warning generation
+            pass
+        return base_message
 
 class DumbEnvironment:
     """
