@@ -1,0 +1,90 @@
+diff --git a/astropy/utils/misc.py b/astropy/utils/misc.py
+index de3fb01d1..a52668d70 100644
+--- a/astropy/utils/misc.py
++++ b/astropy/utils/misc.py
+@@ -519,25 +519,69 @@ class InheritDocstrings(type):
+         >>> B.wiggle.__doc__
+         u'Wiggle the thingamajig'
+     """
+-
+-    def __init__(cls, name, bases, dct):
+-        def is_public_member(key):
+-            return (
+-                (key.startswith('__') and key.endswith('__')
+-                 and len(key) > 4) or
+-                not key.startswith('_'))
+-
+-        for key, val in dct.items():
+-            if (inspect.isfunction(val) and
+-                is_public_member(key) and
+-                val.__doc__ is None):
++def __init__(cls, name, bases, dct):
++    def is_public_member(key):
++        return (
++            (key.startswith('__') and key.endswith('__')
++             and len(key) > 4) or
++            not key.startswith('_'))
++
++    for key, val in dct.items():
++        # Only consider public members
++        if not is_public_member(key):
++            continue
++
++        # Unwrap classmethod/staticmethod to the underlying function if present
++        func = None
++        if inspect.isfunction(val):
++            func = val
++        elif isinstance(val, (classmethod, staticmethod)):
++            func = val.__func__
++
++        # If it's a function (including classmethod/staticmethod) with no doc, inherit it
++        if func is not None and func.__doc__ is None:
++            for base in cls.__mro__[1:]:
++                super_attr = getattr(base, key, None)
++                if super_attr is None:
++                    continue
++                if isinstance(super_attr, (classmethod, staticmethod)):
++                    src = super_attr.__func__
++                    doc = getattr(src, '__doc__', None)
++                elif isinstance(super_attr, property):
++                    doc = super_attr.__doc__ or (super_attr.fget.__doc__ if getattr(super_attr, 'fget', None) is not None else None)
++                else:
++                    doc = getattr(super_attr, '__doc__', None)
++                if doc:
++                    func.__doc__ = doc
++                    break
++
++        # If it's a property, try to inherit docstring from base property's __doc__ or fget.__doc__
++        elif isinstance(val, property):
++            prop_doc = val.__doc__ or (val.fget.__doc__ if getattr(val, 'fget', None) is not None else None)
++            if prop_doc is None:
+                 for base in cls.__mro__[1:]:
+-                    super_method = getattr(base, key, None)
+-                    if super_method is not None:
+-                        val.__doc__ = super_method.__doc__
++                    super_attr = getattr(base, key, None)
++                    if super_attr is None:
++                        continue
++                    if isinstance(super_attr, property):
++                        doc = super_attr.__doc__ or (super_attr.fget.__doc__ if getattr(super_attr, 'fget', None) is not None else None)
++                    else:
++                        doc = getattr(super_attr, '__doc__', None)
++                    if doc:
++                        # Prefer setting the fget.__doc__ when available so inspect.getdoc/help pick it up
++                        if getattr(val, 'fget', None) is not None:
++                            try:
++                                val.fget.__doc__ = doc
++                            except Exception:
++                                pass
++                        else:
++                            try:
++                                val.__doc__ = doc
++                            except Exception:
++                                pass
+                         break
+ 
+-        super().__init__(name, bases, dct)
++    super().__init__(name, bases, dct)
+ 
+ 
+ class OrderedDescriptor(metaclass=abc.ABCMeta):

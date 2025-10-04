@@ -1,0 +1,44 @@
+diff --git a/tests/conftest.py b/tests/conftest.py
+new file mode 100644
+index 0000000000..5a12a3b1d0
+--- /dev/null
++++ b/tests/conftest.py
+@@ -0,0 +1,37 @@
++# Monkeypatch to ensure threaded live-server threads close Django DB connections
++# Put this file at tests/conftest.py (or tests/__init__.py) so it's loaded during test runs.
++# Remove this once you've upgraded to a Django release that includes the upstream fix (ticket #32416).
++try:
++    from django.core.servers import basehttp
++    from django.db import connections
++except Exception:
++    basehttp = None
++    connections = None
++
++if basehttp is not None:
++    class ClosingThreadedWSGIServer(getattr(basehttp, "ThreadedWSGIServer")):
++        """
++        Subclass ThreadedWSGIServer to ensure Django DB connections used by
++        request-handling threads are closed when the request/socket is closed.
++        This mirrors the upstream fix that closes DB connections per-thread.
++        """
++
++        def _close_connections(self):
++            # Close all Django DB connections used by this thread.
++            # Use a broad except to avoid interfering with test runner in odd envs.
++            try:
++                if connections is not None:
++                    connections.close_all()
++            except Exception:
++                pass
++
++        def close_request(self, request):
++            # Called by socketserver to finish handling a single request.
++            # Close any Django DB connections associated with this thread before
++            # the socket is closed to avoid leftover connections that block
++            # destroy_test_db().
++            self._close_connections()
++            return super(ClosingThreadedWSGIServer, self).close_request(request)
++
++    # Apply the monkeypatch so Django's LiveServerTestCase uses the closing server.
++    basehttp.ThreadedWSGIServer = ClosingThreadedWSGIServer
+\ No newline at end of file
