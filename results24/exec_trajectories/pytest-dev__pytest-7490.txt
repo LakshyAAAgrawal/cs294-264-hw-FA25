@@ -1154,3 +1154,1342 @@ end_line
    289      ) -> TerminalRepr:
 
 
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll inspect the python.py file around the xfail-related code to see how MARK_GEN.xfail is added and how it's later handled.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/_pytest/python.py
+----ARG----
+start_line
+200
+----ARG----
+end_line
+320
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+        
+   200  def path_matches_patterns(path: py.path.local, patterns: Iterable[str]) -> bool:
+   201      """Returns True if path matches any of the patterns in the list of globs given."""
+   202      return any(path.fnmatch(pattern) for pattern in patterns)
+        
+        
+   203  def pytest_pycollect_makemodule(path: py.path.local, parent) -> "Module":
+   204      if path.basename == "__init__.py":
+   205          pkg = Package.from_parent(parent, fspath=path)  # type: Package
+   206          return pkg
+   207      mod = Module.from_parent(parent, fspath=path)  # type: Module
+   208      return mod
+        
+        
+   209  @hookimpl(trylast=True)
+   210  def pytest_pycollect_makeitem(collector: "PyCollector", name: str, obj: object):
+   211      # nothing was collected elsewhere, let's do it here
+   212      if safe_isclass(obj):
+   213          if collector.istestclass(obj, name):
+   214              return Class.from_parent(collector, name=name, obj=obj)
+   215      elif collector.istestfunction(obj, name):
+   216          # mock seems to store unbound methods (issue473), normalize it
+   217          obj = getattr(obj, "__func__", obj)
+   218          # We need to try and unwrap the function if it's a functools.partial
+   219          # or a functools.wrapped.
+   220          # We mustn't if it's been wrapped with mock.patch (python 2 only)
+   221          if not (inspect.isfunction(obj) or inspect.isfunction(get_real_func(obj))):
+   222              filename, lineno = getfslineno(obj)
+   223              warnings.warn_explicit(
+   224                  message=PytestCollectionWarning(
+   225                      "cannot collect %r because it is not a function." % name
+   226                  ),
+   227                  category=None,
+   228                  filename=str(filename),
+   229                  lineno=lineno + 1,
+   230              )
+   231          elif getattr(obj, "__test__", True):
+   232              if is_generator(obj):
+   233                  res = Function.from_parent(collector, name=name)
+   234                  reason = "yield tests were removed in pytest 4.0 - {name} will be ignored".format(
+   235                      name=name
+   236                  )
+   237                  res.add_marker(MARK_GEN.xfail(run=False, reason=reason))
+   238                  res.warn(PytestCollectionWarning(reason))
+   239              else:
+   240                  res = list(collector._genfunctions(name, obj))
+   241              return res
+        
+        
+   242  class PyobjMixin:
+   243      _ALLOW_MARKERS = True
+        
+   244      # Function and attributes that the mixin needs (for type-checking only).
+   245      if TYPE_CHECKING:
+   246          name = ""  # type: str
+   247          parent = None  # type: Optional[nodes.Node]
+   248          own_markers = []  # type: List[Mark]
+        
+   249          def getparent(self, cls: Type[nodes._NodeType]) -> Optional[nodes._NodeType]:
+   250              ...
+        
+   251          def listchain(self) -> List[nodes.Node]:
+   252              ...
+        
+   253      @property
+   254      def module(self):
+   255          """Python module object this node was collected from (can be None)."""
+   256          node = self.getparent(Module)
+   257          return node.obj if node is not None else None
+        
+   258      @property
+   259      def cls(self):
+   260          """Python class object this node was collected from (can be None)."""
+   261          node = self.getparent(Class)
+   262          return node.obj if node is not None else None
+        
+   263      @property
+   264      def instance(self):
+   265          """Python instance object this node was collected from (can be None)."""
+   266          node = self.getparent(Instance)
+   267          return node.obj if node is not None else None
+        
+   268      @property
+   269      def obj(self):
+   270          """Underlying Python object."""
+   271          obj = getattr(self, "_obj", None)
+   272          if obj is None:
+   273              self._obj = obj = self._getobj()
+   274              # XXX evil hack
+   275              # used to avoid Instance collector marker duplication
+   276              if self._ALLOW_MARKERS:
+   277                  self.own_markers.extend(get_unpacked_marks(self.obj))
+   278          return obj
+        
+   279      @obj.setter
+   280      def obj(self, value):
+   281          self._obj = value
+        
+   282      def _getobj(self):
+   283          """Gets the underlying Python object. May be overwritten by subclasses."""
+   284          # TODO: Improve the type of `parent` such that assert/ignore aren't needed.
+   285          assert self.parent is not None
+   286          obj = self.parent.obj  # type: ignore[attr-defined]
+   287          return getattr(obj, self.name)
+        
+   288      def getmodpath(self, stopatmodule: bool = True, includemodule: bool = False) -> str:
+   289          """ return python path relative to the containing module. """
+   290          chain = self.listchain()
+   291          chain.reverse()
+   292          parts = []
+   293          for node in chain:
+   294              if isinstance(node, Instance):
+   295                  continue
+   296              name = node.name
+   297              if isinstance(node, Module):
+   298                  name = os.path.splitext(name)[0]
+   299                  if stopatmodule:
+   300                      if includemodule:
+   301                          parts.append(name)
+   302                      break
+   303              parts.append(name)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I will search the repository for occurrences of "xfail" to find where xfail markers are interpreted at runtime so I can trace why dynamically-added xfail markers no longer cause failures to be treated as xfailed.  
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+xfail
+----ARG----
+directory
+.
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+./pyproject.toml:19:xfail_strict = true
+./doc/en/flaky.rst:40::ref:`pytest.mark.xfail ref` with ``strict=False`` can be used to mark a test so that its failure does not cause the whole build to break. This could be considered like a manual quarantine, and is rather dangerous to use permanently.
+./doc/en/assert.rst:138:``pytest.mark.xfail``, which checks that the test is failing in a more
+./doc/en/assert.rst:143:    @pytest.mark.xfail(raises=IndexError)
+./doc/en/assert.rst:149:``@pytest.mark.xfail`` with a check function is probably better for something
+./doc/en/historical-notes.rst:179:        "test_input,expected", [("3+5", 8), ("2+4", 6), pytest.mark.xfail(("6*9", 42))]
+./doc/en/historical-notes.rst:220:Prior to pytest-2.4 the only way to specify skipif/xfail conditions was
+./doc/en/historical-notes.rst:249:or ``pytest.mark.xfail(conditionstring)`` takes place in a namespace
+./doc/en/skipping.rst:1:.. _`skip and xfail`:
+./doc/en/skipping.rst:5:Skip and xfail: dealing with tests that cannot succeed
+./doc/en/skipping.rst:17:A **xfail** means that you expect a test to fail for some reason.
+./doc/en/skipping.rst:19:When a test passes despite being expected to fail (marked with ``pytest.mark.xfail``),
+./doc/en/skipping.rst:22:``pytest`` counts and lists *skip* and *xfail* tests separately. Detailed
+./doc/en/skipping.rst:23:information about skipped/xfailed tests is not shown by default to avoid
+./doc/en/skipping.rst:29:    pytest -rxXs  # show extra info on xfailed, xpassed, and skipped tests
+./doc/en/skipping.rst:223:.. _xfail:
+./doc/en/skipping.rst:228:You can use the ``xfail`` marker to indicate that you
+./doc/en/skipping.rst:233:    @pytest.mark.xfail
+./doc/en/skipping.rst:248:            pytest.xfail("failing configuration (but should work)")
+./doc/en/skipping.rst:256:            pytest.xfail("slow_module taking too long")
+./doc/en/skipping.rst:262:the ``pytest.xfail`` call, differently from the marker. That's because it is implemented
+./doc/en/skipping.rst:265:**Reference**: :ref:`pytest.mark.xfail ref`
+./doc/en/skipping.rst:276:    @pytest.mark.xfail(sys.platform == "win32", reason="bug in a 3rd party library")
+./doc/en/skipping.rst:281::ref:`pytest.mark.xfail ref`).
+./doc/en/skipping.rst:290:    @pytest.mark.xfail(reason="known parser issue")
+./doc/en/skipping.rst:303:    @pytest.mark.xfail(raises=RuntimeError)
+./doc/en/skipping.rst:313:If a test should be marked as xfail and reported as such but should not be
+./doc/en/skipping.rst:318:    @pytest.mark.xfail(run=False)
+./doc/en/skipping.rst:322:This is specially useful for xfailing tests that are crashing the interpreter and should be
+./doc/en/skipping.rst:325:.. _`xfail strict tutorial`:
+./doc/en/skipping.rst:335:    @pytest.mark.xfail(strict=True)
+./doc/en/skipping.rst:343:``xfail_strict`` ini option:
+./doc/en/skipping.rst:348:    xfail_strict=true
+./doc/en/skipping.rst:351:Ignoring xfail
+./doc/en/skipping.rst:358:    pytest --runxfail
+./doc/en/skipping.rst:360:you can force the running and reporting of an ``xfail`` marked test
+./doc/en/skipping.rst:361:as if it weren't marked at all. This also causes ``pytest.xfail`` to produce no effect.
+./doc/en/skipping.rst:368:.. literalinclude:: example/xfail_demo.py
+./doc/en/skipping.rst:370:Running it with the report-on-xfail option gives this output:
+./doc/en/skipping.rst:374:    example $ pytest -rx xfail_demo.py
+./doc/en/skipping.rst:381:    xfail_demo.py xxxxxxx                                                [100%]
+./doc/en/skipping.rst:384:    XFAIL xfail_demo.py::test_hello
+./doc/en/skipping.rst:385:    XFAIL xfail_demo.py::test_hello2
+./doc/en/skipping.rst:387:    XFAIL xfail_demo.py::test_hello3
+./doc/en/skipping.rst:389:    XFAIL xfail_demo.py::test_hello4
+./doc/en/skipping.rst:391:    XFAIL xfail_demo.py::test_hello5
+./doc/en/skipping.rst:393:    XFAIL xfail_demo.py::test_hello6
+./doc/en/skipping.rst:395:    XFAIL xfail_demo.py::test_hello7
+./doc/en/skipping.rst:396:    ============================ 7 xfailed in 0.12s ============================
+./doc/en/skipping.rst:398:.. _`skip/xfail with parametrize`:
+./doc/en/skipping.rst:400:Skip/xfail with parametrize
+./doc/en/skipping.rst:403:It is possible to apply markers like skip and xfail to individual
+./doc/en/skipping.rst:415:            pytest.param(1, 0, marks=pytest.mark.xfail),
+./doc/en/skipping.rst:416:            pytest.param(1, 3, marks=pytest.mark.xfail(reason="some bug")),
+./doc/en/unittest.rst:47:* :ref:`maxfail`;
+./doc/en/unittest.rst:60:* :ref:`Marks <mark>`: :ref:`skip <skip>`, :ref:`skipif <skipif>`, :ref:`xfail <xfail>`;
+./doc/en/changelog.rst:387:- `#7360 <https://github.com/pytest-dev/pytest/issues/7360>`_: Fix possibly incorrect evaluation of string expressions passed to ``pytest.mark.skipif`` and ``pytest.mark.xfail``,
+./doc/en/changelog.rst:637:- `#310 <https://github.com/pytest-dev/pytest/issues/310>`_: Add support for calling `pytest.xfail()` and `pytest.importorskip()` with doctests.
+./doc/en/changelog.rst:973:- `#6069 <https://github.com/pytest-dev/pytest/issues/6069>`_: ``pytester.spawn`` does not skip/xfail tests on FreeBSD anymore unconditionally.
+./doc/en/changelog.rst:991:- `#6181 <https://github.com/pytest-dev/pytest/issues/6181>`_: The reason for a stopped session, e.g. with ``--maxfail`` / ``-x``, now gets reported in the test summary.
+./doc/en/changelog.rst:1225:- `#5615 <https://github.com/pytest-dev/pytest/issues/5615>`_: ``pytest.fail``, ``pytest.xfail`` and ``pytest.skip`` no longer support bytes for the message argument.
+./doc/en/changelog.rst:1281:- `#5578 <https://github.com/pytest-dev/pytest/issues/5578>`_: Improve type checking for some exception-raising functions (``pytest.xfail``, ``pytest.skip``, etc)
+./doc/en/changelog.rst:1282:  so they provide better error messages when users meant to use marks (for example ``@pytest.xfail``
+./doc/en/changelog.rst:1283:  instead of ``@pytest.mark.xfail``).
+./doc/en/changelog.rst:1325:  the ``test_xfail_handling`` test no longer fails.
+./doc/en/changelog.rst:1343:- `#5547 <https://github.com/pytest-dev/pytest/issues/5547>`_: ``--step-wise`` now handles ``xfail(strict=True)`` markers properly.
+./doc/en/changelog.rst:1644:- `#5547 <https://github.com/pytest-dev/pytest/issues/5547>`_: ``--step-wise`` now handles ``xfail(strict=True)`` markers properly.
+./doc/en/changelog.rst:1946:- `#5188 <https://github.com/pytest-dev/pytest/issues/5188>`_: Improve help for ``--runxfail`` flag.
+./doc/en/changelog.rst:2330:- `#4668 <https://github.com/pytest-dev/pytest/issues/4668>`_: The verbose word for expected failures in the teststatus report changes from ``xfail`` to ``XFAIL`` to be consistent with other test outcomes.
+./doc/en/changelog.rst:3190:- `#3837 <https://github.com/pytest-dev/pytest/issues/3837>`_: Added support for 'xfailed' and 'xpassed' outcomes to the ``pytester.RunResult.assert_outcomes`` signature.
+./doc/en/changelog.rst:3213:- `#3907 <https://github.com/pytest-dev/pytest/issues/3907>`_: Corrected type of the exceptions collection passed to ``xfail``: ``raises`` argument accepts a ``tuple`` instead of ``list``.
+./doc/en/changelog.rst:3550:  was marked xfail. (`#3491
+./doc/en/changelog.rst:3991:  Valid options are ``skip`` (default) and ``xfail``. Note that it is planned
+./doc/en/changelog.rst:3992:  to change the default to ``xfail`` in future releases as this is considered
+./doc/en/changelog.rst:4316:- Change return value of pytest command when ``--maxfail`` is reached from
+./doc/en/changelog.rst:4403:- Explicitly mention ``xpass`` in the documentation of ``xfail``. (`#1997
+./doc/en/changelog.rst:4455:- Set ``xfail_strict=True`` in pytest's own test suite to catch expected
+./doc/en/changelog.rst:4619:- Exceptions raised by ``pytest.fail``, ``pytest.skip`` and ``pytest.xfail``
+./doc/en/changelog.rst:4780:- Make it clear that ``pytest.xfail`` stops test execution at the calling point
+./doc/en/changelog.rst:5010:* Conditionless ``xfail`` markers no longer rely on the underlying test item
+./doc/en/changelog.rst:5371:* ``--exitfirst / -x`` can now be overridden by a following ``--maxfail=N``
+./doc/en/changelog.rst:5372:  and is just a synonym for ``--maxfail=1``.
+./doc/en/changelog.rst:5443:  For example: ``"-o xfail_strict=True"``'.
+./doc/en/changelog.rst:5471:* Tests marked with ``xfail(strict=False)`` (the default) now appear in
+./doc/en/changelog.rst:5827:* ``pytest.mark.xfail`` now has a ``strict`` option, which makes ``XPASS``
+./doc/en/changelog.rst:5829:  ``xfail_strict`` ini option that can be used to configure it project-wise.
+./doc/en/changelog.rst:6180:  situations such as: all tests either were skipped or xpass/xfailed,
+./doc/en/changelog.rst:6190:  situations such as: all tests either were skipped or xpass/xfailed,
+./doc/en/changelog.rst:6327:- fix issue863: skipped tests now report the correct reason when a skip/xfail
+./doc/en/changelog.rst:6522:- check xfail/skip also with non-python function test items. Thanks
+./doc/en/changelog.rst:6569:- address issue170: allow pytest.mark.xfail(...) to specify expected exceptions via
+./doc/en/changelog.rst:6834:- make "--runxfail" turn imperative pytest.xfail calls into no ops
+./doc/en/changelog.rst:6835:  (it already did neutralize pytest.mark.xfail markers)
+./doc/en/changelog.rst:6855:- xfail a test on pypy that checks wrong encoding/ascii (pypy does
+./doc/en/changelog.rst:6957:- allow boolean expression directly with skipif/xfail
+./doc/en/changelog.rst:7010:- fix issue 308 - allow to mark/xfail/skip individual parameter sets
+./doc/en/changelog.rst:7279:- fix xfail/skip confusion: a skip-mark or an imperative pytest.skip
+./doc/en/changelog.rst:7280:  will now take precedence before xfail-markers because we
+./doc/en/changelog.rst:7281:  can't determine xfail/xpass status in case of a skip. see also:
+./doc/en/changelog.rst:7282:  http://stackoverflow.com/questions/11105828/in-py-test-when-i-explicitly-skip-a-test-that-is-marked-as-xfail-how-can-i-get
+./doc/en/changelog.rst:7286:- fix issue160: a failing setup of an xfail-marked tests should
+./doc/en/changelog.rst:7287:  be reported as xfail (not xpass)
+./doc/en/changelog.rst:7506:- fix issue30 - extended xfail/skipif handling and improved reporting.
+./doc/en/changelog.rst:7507:  If you have a syntax error in your skip/xfail
+./doc/en/changelog.rst:7510:  Also you can now access module globals from xfail/skipif
+./doc/en/changelog.rst:7523:  (or xfail-ing) tests.
+./doc/en/changelog.rst:7583:- fix issue9: setup/teardown functions for an xfail-marked
+./doc/en/changelog.rst:7584:  test will report as xfail if they fail but report as normally
+./doc/en/changelog.rst:7693:        request.applymarker(py.test.mark.xfail(reason="flaky config"))
+./doc/en/changelog.rst:7713:- refine --pdb: ignore xfailed tests, unify its TB-reporting and
+./doc/en/changelog.rst:7748:- issue91: introduce new py.test.xfail(reason) helper
+./doc/en/changelog.rst:7753:  declarative approach with the @py.test.mark.xfail cannot
+./doc/en/changelog.rst:7754:  be used as it would mark all configurations as xfail.
+./doc/en/changelog.rst:7756:- issue102: introduce new --maxfail=NUM option to stop
+./doc/en/changelog.rst:7759:  to '--maxfail=1'.  Both '-x' and '--maxfail' will
+./doc/en/changelog.rst:7771:  x  xfailed test (test that was expected to fail)
+./doc/en/changelog.rst:7775:  reporting option. The xfail/xpass results will show up as
+./doc/en/changelog.rst:7802:- fix chaining of conditional skipif/xfail decorators - so it works now
+./doc/en/changelog.rst:7842:- extend and refine xfail mechanism:
+./doc/en/changelog.rst:7843:  ``@py.test.mark.xfail(run=False)`` do not run the decorated test
+./doc/en/changelog.rst:7844:  ``@py.test.mark.xfail(reason="...")`` prints the reason string in xfail summaries
+./doc/en/changelog.rst:7845:  specifying ``--runxfail`` on command line virtually ignores xfail markers
+./doc/en/changelog.rst:8045:* add --report command line option that allows to control showing of skipped/xfailed sections
+./doc/en/changelog.rst:8047:* generalized skipping: a new way to mark python functions with skipif or xfail
+./doc/en/changelog.rst:8151:* improve xfail output a bit
+./doc/en/changelog.rst:8219:* renamed py.test.xfail back to py.test.mark.xfail to avoid
+./doc/en/changelog.rst:8220:  two ways to decorate for xfail
+./doc/en/announce/release-2.0.0.rst:115:    and pytestmark mechanism to skip or xfail a test class.
+./doc/en/announce/release-2.6.3.rst:50:- check xfail/skip also with non-python function test items. Thanks
+./doc/en/announce/release-2.3.0.rst:80:- fix xfail/skip confusion: a skip-mark or an imperative pytest.skip
+./doc/en/announce/release-2.3.0.rst:81:  will now take precedence before xfail-markers because we
+./doc/en/announce/release-2.3.0.rst:82:  can't determine xfail/xpass status in case of a skip. see also:
+./doc/en/announce/release-2.3.0.rst:83:  http://stackoverflow.com/questions/11105828/in-py-test-when-i-explicitly-skip-a-test-that-is-marked-as-xfail-how-can-i-get
+./doc/en/announce/release-2.3.0.rst:87:- fix issue160: a failing setup of an xfail-marked tests should
+./doc/en/announce/release-2.3.0.rst:88:  be reported as xfail (not xpass)
+./doc/en/announce/release-2.0.1.rst:51:- fix issue9: setup/teardown functions for an xfail-marked
+./doc/en/announce/release-2.0.1.rst:52:  test will report as xfail if they fail but report as normally
+./doc/en/announce/release-2.6.1.rst:1:pytest-2.6.1: fixes and new xfail feature
+./doc/en/announce/release-2.6.1.rst:8:to the xfail marker which now recognizes expected exceptions,
+./doc/en/announce/release-2.6.1.rst:43:- address issue170: allow pytest.mark.xfail(...) to specify expected exceptions via
+./doc/en/announce/release-2.9.0.rst:56:* ``pytest.mark.xfail`` now has a ``strict`` option which makes ``XPASS``
+./doc/en/announce/release-2.9.0.rst:58:  ``xfail_strict`` ini option that can be used to configure it project-wise.
+./doc/en/announce/release-2.4.0.rst:29:- allow boolean expression directly with skipif/xfail
+./doc/en/announce/release-2.4.0.rst:91:- allow boolean expression directly with skipif/xfail
+./doc/en/announce/release-2.4.0.rst:144:- fix issue 308 - allow to mark/xfail/skip individual parameter sets
+./doc/en/announce/release-2.5.0.rst:134:- make "--runxfail" turn imperative pytest.xfail calls into no ops
+./doc/en/announce/release-2.5.0.rst:135:  (it already did neutralize pytest.mark.xfail markers)
+./doc/en/announce/release-2.5.0.rst:155:- xfail a test on pypy that checks wrong encoding/ascii (pypy does
+./doc/en/announce/release-2.0.2.rst:1:py.test 2.0.2: bug fixes, improved xfail/skip expressions, speed ups
+./doc/en/announce/release-2.0.2.rst:29:- fix issue30 - extended xfail/skipif handling and improved reporting.
+./doc/en/announce/release-2.0.2.rst:30:  If you have a syntax error in your skip/xfail
+./doc/en/announce/release-2.0.2.rst:33:  Also you can now access module globals from xfail/skipif
+./doc/en/announce/release-2.0.2.rst:46:  (or xfail-ing) tests.
+./doc/en/mark.rst:17:* :ref:`xfail <xfail>` - produce an "expected failure" outcome if a certain
+./doc/en/usage.rst:60:.. _maxfail:
+./doc/en/usage.rst:70:    pytest --maxfail=2  # stop after two failures
+./doc/en/usage.rst:173:making it easy in large test suites to get a clear picture of all failures, skips, xfails, etc.
+./doc/en/usage.rst:206:    def test_xfail():
+./doc/en/usage.rst:207:        pytest.xfail("xfailing this test")
+./doc/en/usage.rst:210:    @pytest.mark.xfail(reason="always xfail")
+./doc/en/usage.rst:245:    XFAIL test_example.py::test_xfail
+./doc/en/usage.rst:246:      reason: xfailing this test
+./doc/en/usage.rst:247:    XPASS test_example.py::test_xpass always xfail
+./doc/en/usage.rst:250:    == 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12s ===
+./doc/en/usage.rst:260: - ``x`` - xfailed
+./doc/en/usage.rst:304:    == 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12s ===
+./doc/en/usage.rst:343:    == 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12s ===
+./doc/en/usage.rst:366:    pytest --pdb --maxfail=3  # drop to PDB for first three failures
+./doc/en/example/simple.rst:11:detailed info on skipped and xfailed tests, as well as have terser "dot"
+./doc/en/example/simple.rst:560:                    pytest.xfail("previous test failed ({})".format(test_name))
+./doc/en/example/simple.rst:614:    ================== 1 failed, 2 passed, 1 xfailed in 0.12s ==================
+./doc/en/example/simple.rst:732:    ============= 3 failed, 2 passed, 1 xfailed, 1 error in 0.12s ==============
+./doc/en/example/markers.rst:233:    @pytest.mark.xfail(condition, ..., *, reason=..., run=True, raises=None, strict=xfail_strict): mark the test function as an expected failure if any of the conditions evaluate to True. Optionally specify a reason for better reporting and run=False if you don't even want to execute the test function. If only specific exception(s) are expected, you can list them in raises, and if the test fails in other ways, it will be reported as a true failure. See https://docs.pytest.org/en/stable/reference.html#pytest-mark-xfail
+./doc/en/example/markers.rst:327:Skip and xfail marks can also be applied in this way, see :ref:`skip/xfail with parametrize`.
+./doc/en/example/markers.rst:427:    @pytest.mark.xfail(condition, ..., *, reason=..., run=True, raises=None, strict=xfail_strict): mark the test function as an expected failure if any of the conditions evaluate to True. Optionally specify a reason for better reporting and run=False if you don't even want to execute the test function. If only specific exception(s) are expected, you can list them in raises, and if the test fails in other ways, it will be reported as a true failure. See https://docs.pytest.org/en/stable/reference.html#pytest-mark-xfail
+./doc/en/example/parametrize.rst:619:                "6*9", 42, marks=[pytest.mark.basic, pytest.mark.xfail], id="basic_6*9"
+./doc/en/example/parametrize.rst:628:and for the fourth test we also use the built-in mark ``xfail`` to indicate this
+./doc/en/example/parametrize.rst:646:    =============== 2 passed, 11 deselected, 1 xfailed in 0.12s ================
+./doc/en/example/xfail_demo.py:3:xfail = pytest.mark.xfail
+./doc/en/example/xfail_demo.py:6:@xfail
+./doc/en/example/xfail_demo.py:11:@xfail(run=False)
+./doc/en/example/xfail_demo.py:16:@xfail("hasattr(os, 'sep')")
+./doc/en/example/xfail_demo.py:21:@xfail(reason="bug 110")
+./doc/en/example/xfail_demo.py:26:@xfail('pytest.__version__[0] != "17"')
+./doc/en/example/xfail_demo.py:32:    pytest.xfail("reason")
+./doc/en/example/xfail_demo.py:35:@xfail(raises=IndexError)
+./doc/en/reference.rst:39:pytest.xfail
+./doc/en/reference.rst:42:.. autofunction:: pytest.xfail
+./doc/en/reference.rst:193:.. _`pytest.mark.xfail ref`:
+./doc/en/reference.rst:195:pytest.mark.xfail
+./doc/en/reference.rst:198:**Tutorial**: :ref:`xfail`.
+./doc/en/reference.rst:202:.. py:function:: pytest.mark.xfail(condition=None, *, reason=None, raises=None, run=True, strict=False)
+./doc/en/reference.rst:206:        Condition for marking the test function as xfail (``True/False`` or a
+./doc/en/reference.rst:209:    :keyword str reason: Reason why the test function is marked as xfail.
+./doc/en/reference.rst:212:        If the test function should actually be executed. If ``False``, the function will always xfail and will
+./doc/en/reference.rst:215:        * If ``False`` (the default) the function will be shown in the terminal output as ``xfailed`` if it fails
+./doc/en/reference.rst:218:        * If ``True``, the function will be shown in the terminal output as ``xfailed`` if it fails, but if it
+./doc/en/reference.rst:1060:        addopts = --maxfail=2 -rf  # exit after 2 failures, report fail info
+./doc/en/reference.rst:1066:        pytest --maxfail=2 -rf test_hello.py
+./doc/en/reference.rst:1130:    * ``xfail`` marks tests with an empty parameterset as xfail(run=False)
+./doc/en/reference.rst:1137:      empty_parameter_set_mark = xfail
+./doc/en/reference.rst:1141:      The default value of this option is planned to change to ``xfail`` in future releases
+./doc/en/reference.rst:1620:.. confval:: xfail_strict
+./doc/en/reference.rst:1622:    If set to ``True``, tests marked with ``@pytest.mark.xfail`` that actually succeed will by default fail the
+./doc/en/reference.rst:1624:    For more information, see :ref:`xfail strict tutorial`.
+./doc/en/reference.rst:1630:        xfail_strict = True
+./doc/en/parametrize.rst:105:for example with the builtin ``mark.xfail``:
+./doc/en/parametrize.rst:115:        [("3+5", 8), ("2+4", 6), pytest.param("6*9", 42, marks=pytest.mark.xfail)],
+./doc/en/parametrize.rst:133:    ======================= 2 passed, 1 xfailed in 0.12s =======================
+./doc/en/parametrize.rst:136:shows up as an "xfailed" (expected to fail) test.
+./doc/en/deprecations.rst:289:            pytest.mark.xfail(reason="flaky")(6, 36),
+./doc/en/deprecations.rst:299:This code applies the ``pytest.mark.xfail(reason="flaky")`` mark to the ``(6, 36)`` value of the above parametrization
+./doc/en/deprecations.rst:313:            pytest.param(6, 36, marks=pytest.mark.xfail(reason="flaky")),
+./changelog/7392.bugfix.rst:1:Fix the reported location of tests skipped with ``@pytest.mark.skip`` when ``--runxfail`` is used.
+./testing/test_junitxml.py:144:            @pytest.mark.xfail
+./testing/test_junitxml.py:145:            def test_xfail():
+./testing/test_junitxml.py:147:            @pytest.mark.xfail
+./testing/test_junitxml.py:171:            @pytest.mark.xfail
+./testing/test_junitxml.py:172:            def test_xfail():
+./testing/test_junitxml.py:174:            @pytest.mark.xfail(strict=True)
+./testing/test_junitxml.py:591:    def test_xfailure_function(self, testdir, run_and_parse, xunit_family):
+./testing/test_junitxml.py:595:            def test_xfail():
+./testing/test_junitxml.py:596:                pytest.xfail("42")
+./testing/test_junitxml.py:604:        tnode.assert_attr(classname="test_xfailure_function", name="test_xfail")
+./testing/test_junitxml.py:606:        fnode.assert_attr(type="pytest.xfail", message="42")
+./testing/test_junitxml.py:609:    def test_xfailure_marker(self, testdir, run_and_parse, xunit_family):
+./testing/test_junitxml.py:613:            @pytest.mark.xfail(reason="42")
+./testing/test_junitxml.py:614:            def test_xfail():
+./testing/test_junitxml.py:623:        tnode.assert_attr(classname="test_xfailure_marker", name="test_xfail")
+./testing/test_junitxml.py:625:        fnode.assert_attr(type="pytest.xfail", message="42")
+./testing/test_junitxml.py:630:    def test_xfail_captures_output_once(self, testdir, junit_logging, run_and_parse):
+./testing/test_junitxml.py:636:            @pytest.mark.xfail()
+./testing/test_junitxml.py:657:    def test_xfailure_xpass(self, testdir, run_and_parse, xunit_family):
+./testing/test_junitxml.py:661:            @pytest.mark.xfail
+./testing/test_junitxml.py:671:        tnode.assert_attr(classname="test_xfailure_xpass", name="test_xpass")
+./testing/test_junitxml.py:674:    def test_xfailure_xpass_strict(self, testdir, run_and_parse, xunit_family):
+./testing/test_junitxml.py:678:            @pytest.mark.xfail(strict=True, reason="This needs to fail!")
+./testing/test_junitxml.py:688:        tnode.assert_attr(classname="test_xfailure_xpass_strict", name="test_xpass")
+./testing/test_junitxml.py:1127:    test_report.wasxfail = ustr  # type: ignore[attr-defined]
+./testing/test_pytester.py:26:    pytest.xfail("internal reportrecorder tests need refactoring")
+./testing/test_pytester.py:115:def test_runresult_assertion_on_xfail(testdir) -> None:
+./testing/test_pytester.py:122:        @pytest.mark.xfail
+./testing/test_pytester.py:128:    result.assert_outcomes(xfailed=1)
+./testing/test_pytester.py:139:        @pytest.mark.xfail
+./testing/test_pytester.py:156:        @pytest.mark.xfail(strict=True)
+./testing/test_skipping.py:6:from _pytest.skipping import evaluate_xfail_marks
+./testing/test_skipping.py:16:    def test_marked_xfail_no_args(self, testdir):
+./testing/test_skipping.py:20:            @pytest.mark.xfail
+./testing/test_skipping.py:25:        xfailed = evaluate_xfail_marks(item)
+./testing/test_skipping.py:26:        assert xfailed
+./testing/test_skipping.py:27:        assert xfailed.reason == ""
+./testing/test_skipping.py:28:        assert xfailed.run
+./testing/test_skipping.py:158:    def test_xfail_simple(self, testdir, strict):
+./testing/test_skipping.py:162:            @pytest.mark.xfail(strict=%s)
+./testing/test_skipping.py:172:        assert callreport.wasxfail == ""
+./testing/test_skipping.py:174:    def test_xfail_xpassed(self, testdir):
+./testing/test_skipping.py:178:            @pytest.mark.xfail(reason="this is an xfail")
+./testing/test_skipping.py:187:        assert callreport.wasxfail == "this is an xfail"
+./testing/test_skipping.py:189:    def test_xfail_using_platform(self, testdir):
+./testing/test_skipping.py:191:        Verify that platform can be used with xfail statements.
+./testing/test_skipping.py:196:            @pytest.mark.xfail("platform.platform() == platform.platform()")
+./testing/test_skipping.py:204:        assert callreport.wasxfail
+./testing/test_skipping.py:206:    def test_xfail_xpassed_strict(self, testdir):
+./testing/test_skipping.py:210:            @pytest.mark.xfail(strict=True, reason="nope")
+./testing/test_skipping.py:220:        assert not hasattr(callreport, "wasxfail")
+./testing/test_skipping.py:222:    def test_xfail_run_anyway(self, testdir):
+./testing/test_skipping.py:226:            @pytest.mark.xfail
+./testing/test_skipping.py:230:                pytest.xfail("hello")
+./testing/test_skipping.py:233:        result = testdir.runpytest("--runxfail")
+./testing/test_skipping.py:246:                ["-rs", "--runxfail"],
+./testing/test_skipping.py:251:    def test_xfail_run_with_skip_mark(self, testdir, test_input, expected):
+./testing/test_skipping.py:263:    def test_xfail_evalfalse_but_fails(self, testdir):
+./testing/test_skipping.py:267:            @pytest.mark.xfail('False')
+./testing/test_skipping.py:275:        assert not hasattr(callreport, "wasxfail")
+./testing/test_skipping.py:276:        assert "xfail" in callreport.keywords
+./testing/test_skipping.py:278:    def test_xfail_not_report_default(self, testdir):
+./testing/test_skipping.py:282:            @pytest.mark.xfail
+./testing/test_skipping.py:292:    def test_xfail_not_run_xfail_reporting(self, testdir):
+./testing/test_skipping.py:296:            @pytest.mark.xfail(run=False, reason="noway")
+./testing/test_skipping.py:299:            @pytest.mark.xfail("True", run=False)
+./testing/test_skipping.py:302:            @pytest.mark.xfail("False", run=False, reason="huh")
+./testing/test_skipping.py:318:    def test_xfail_not_run_no_setup_run(self, testdir):
+./testing/test_skipping.py:322:            @pytest.mark.xfail(run=False, reason="hello")
+./testing/test_skipping.py:331:            ["*test_one*test_this*", "*NOTRUN*hello", "*1 xfailed*"]
+./testing/test_skipping.py:334:    def test_xfail_xpass(self, testdir):
+./testing/test_skipping.py:338:            @pytest.mark.xfail
+./testing/test_skipping.py:347:    def test_xfail_imperative(self, testdir):
+./testing/test_skipping.py:352:                pytest.xfail("hello")
+./testing/test_skipping.py:356:        result.stdout.fnmatch_lines(["*1 xfailed*"])
+./testing/test_skipping.py:359:        result = testdir.runpytest(p, "--runxfail")
+./testing/test_skipping.py:362:    def test_xfail_imperative_in_setup_function(self, testdir):
+./testing/test_skipping.py:367:                pytest.xfail("hello")
+./testing/test_skipping.py:374:        result.stdout.fnmatch_lines(["*1 xfailed*"])
+./testing/test_skipping.py:377:        result = testdir.runpytest(p, "--runxfail")
+./testing/test_skipping.py:385:    def xtest_dynamic_xfail_set_during_setup(self, testdir):
+./testing/test_skipping.py:390:                pytest.mark.xfail(function)
+./testing/test_skipping.py:400:    def test_dynamic_xfail_no_run(self, testdir):
+./testing/test_skipping.py:406:                request.applymarker(pytest.mark.xfail(run=False))
+./testing/test_skipping.py:414:    def test_dynamic_xfail_set_during_funcarg_setup(self, testdir):
+./testing/test_skipping.py:420:                request.applymarker(pytest.mark.xfail)
+./testing/test_skipping.py:426:        result.stdout.fnmatch_lines(["*1 xfailed*"])
+./testing/test_skipping.py:431:            ("TypeError", "TypeError", "*1 xfailed*"),
+./testing/test_skipping.py:432:            ("(AttributeError, TypeError)", "TypeError", "*1 xfailed*"),
+./testing/test_skipping.py:437:    def test_xfail_raises(self, expected, actual, matchline, testdir):
+./testing/test_skipping.py:441:            @pytest.mark.xfail(raises=%s)
+./testing/test_skipping.py:451:        """sanity check for xfail(strict=True): a failing test should behave
+./testing/test_skipping.py:452:        exactly like a normal xfail.
+./testing/test_skipping.py:457:            @pytest.mark.xfail(reason='unsupported feature', strict=True)
+./testing/test_skipping.py:467:    def test_strict_xfail(self, testdir, strict):
+./testing/test_skipping.py:472:            @pytest.mark.xfail(reason='unsupported feature', strict=%s)
+./testing/test_skipping.py:486:                    "*test_strict_xfail*",
+./testing/test_skipping.py:487:                    "XPASS test_strict_xfail.py::test_foo unsupported feature",
+./testing/test_skipping.py:494:    def test_strict_xfail_condition(self, testdir, strict):
+./testing/test_skipping.py:499:            @pytest.mark.xfail(False, reason='unsupported feature', strict=%s)
+./testing/test_skipping.py:510:    def test_xfail_condition_keyword(self, testdir, strict):
+./testing/test_skipping.py:515:            @pytest.mark.xfail(condition=False, reason='unsupported feature', strict=%s)
+./testing/test_skipping.py:526:    def test_strict_xfail_default_from_file(self, testdir, strict_val):
+./testing/test_skipping.py:530:            xfail_strict = %s
+./testing/test_skipping.py:537:            @pytest.mark.xfail(reason='unsupported feature')
+./testing/test_skipping.py:556:            @pytest.mark.xfail
+./testing/test_skipping.py:562:        result.stdout.fnmatch_lines(["*1 xfail*"])
+./testing/test_skipping.py:571:            @pytest.mark.xfail
+./testing/test_skipping.py:577:        result.stdout.fnmatch_lines(["*1 xfail*"])
+./testing/test_skipping.py:720:        [("skipif", "SKIP", "skipped"), ("xfail", "XPASS", "xpassed")],
+./testing/test_skipping.py:840:        @pytest.mark.xfail
+./testing/test_skipping.py:843:        @pytest.mark.xfail
+./testing/test_skipping.py:877:        @pytest.mark.xfail
+./testing/test_skipping.py:880:        @pytest.mark.xfail
+./testing/test_skipping.py:919:def test_errors_in_xfail_skip_expressions(testdir) -> None:
+./testing/test_skipping.py:926:        @pytest.mark.xfail("syntax error")
+./testing/test_skipping.py:947:            "*evaluating*xfail*condition*",
+./testing/test_skipping.py:956:def test_xfail_skipif_with_globals(testdir):
+./testing/test_skipping.py:964:        @pytest.mark.xfail("x == 3")
+./testing/test_skipping.py:978:            "*xfail(condition, ..., [*], reason=..., run=True, raises=None, strict=xfail_strict)*expected failure*",
+./testing/test_skipping.py:983:def test_xfail_test_setup_exception(testdir):
+./testing/test_skipping.py:993:            @pytest.mark.xfail
+./testing/test_skipping.py:1000:    assert "xfailed" in result.stdout.str()
+./testing/test_skipping.py:1004:def test_imperativeskip_on_xfail_test(testdir):
+./testing/test_skipping.py:1008:        @pytest.mark.xfail
+./testing/test_skipping.py:1070:    def test_xfail(self, testdir):
+./testing/test_skipping.py:1074:            @pytest.mark.xfail(True, reason="True123")
+./testing/test_skipping.py:1084:            *1 xfail*
+./testing/test_skipping.py:1089:def test_xfail_item(testdir):
+./testing/test_skipping.py:1090:    # Ensure pytest.xfail works with non-Python Item
+./testing/test_skipping.py:1098:                pytest.xfail("Expected Failure")
+./testing/test_skipping.py:1107:    xfailed = [r for r in skipped if hasattr(r, "wasxfail")]
+./testing/test_skipping.py:1108:    assert xfailed
+./testing/test_skipping.py:1164:def test_mark_xfail_item(testdir):
+./testing/test_skipping.py:1165:    # Ensure pytest.mark.xfail works with non-Python Item
+./testing/test_skipping.py:1173:                marker = pytest.mark.xfail("1 == 2", reason="Expected failure - false")
+./testing/test_skipping.py:1175:                marker = pytest.mark.xfail(True, reason="Expected failure - true")
+./testing/test_skipping.py:1187:    xfailed = [r for r in skipped if hasattr(r, "wasxfail")]
+./testing/test_skipping.py:1188:    assert xfailed
+./testing/test_skipping.py:1192:    """Ensure the list of errors/fails/xfails/skips appears after tracebacks in terminal reporting."""
+./testing/acceptance_test.py:531:            xfail
+./testing/acceptance_test.py:545:            xfail
+./testing/acceptance_test.py:802:    @pytest.mark.xfail(reason="decide: feature or bug")
+./testing/test_cacheprovider.py:374:            @pytest.mark.xfail
+./testing/test_cacheprovider.py:570:    def test_xfail_not_considered_failure(self, testdir):
+./testing/test_cacheprovider.py:574:            @pytest.mark.xfail
+./testing/test_cacheprovider.py:579:        result.stdout.fnmatch_lines(["*1 xfailed*"])
+./testing/test_cacheprovider.py:582:    def test_xfail_strict_considered_failure(self, testdir):
+./testing/test_cacheprovider.py:586:            @pytest.mark.xfail(strict=True)
+./testing/test_cacheprovider.py:593:            "test_xfail_strict_considered_failure.py::test"
+./testing/test_cacheprovider.py:596:    @pytest.mark.parametrize("mark", ["mark.xfail", "mark.skip"])
+./testing/test_cacheprovider.py:597:    def test_failed_changed_to_xfail_or_skip(self, testdir, mark):
+./testing/test_cacheprovider.py:606:            "test_failed_changed_to_xfail_or_skip.py::test"
+./testing/test_config.py:154:    @pytest.mark.xfail(reason="probably not needed")
+./testing/test_reports.py:148:            @pytest.mark.xfail("True")
+./testing/test_reports.py:149:            def test_xfail(): 0/0
+./testing/test_reports.py:150:            def test_xfail_imperative():
+./testing/test_reports.py:151:                pytest.xfail("hello")
+./testing/test_reports.py:162:            if newrep.skipped and not hasattr(newrep, "wasxfail"):
+./testing/test_runner.py:495:@pytest.mark.xfail
+./testing/test_mark.py:134:        pytest.mark.xfail('FAIL')
+./testing/test_mark.py:833:    @pytest.mark.xfail
+./testing/test_mark.py:919:@pytest.mark.parametrize("mark", [None, "", "skip", "xfail"])
+./testing/test_mark.py:941:    if mark == "xfail":
+./testing/test_collection.py:301:    @pytest.mark.xfail(reason="other mechanism for adding to reporting needed")
+./testing/test_collection.py:895:def test_exit_on_collection_with_maxfail_smaller_than_n_errors(testdir):
+./testing/test_collection.py:897:    Verify collection is aborted once maxfail errors are encountered ignoring
+./testing/test_collection.py:902:    res = testdir.runpytest("--maxfail=1")
+./testing/test_collection.py:916:def test_exit_on_collection_with_maxfail_bigger_than_n_errors(testdir):
+./testing/test_collection.py:918:    Verify the test run aborts due to collection errors even if maxfail count of
+./testing/test_collection.py:923:    res = testdir.runpytest("--maxfail=4")
+./testing/test_collection.py:953:def test_continue_on_collection_errors_maxfail(testdir):
+./testing/test_collection.py:955:    Verify tests are executed even when collection errors occur and that maxfail
+./testing/test_collection.py:958:    test_4 is never executed because the test run is with --maxfail=3 which
+./testing/test_collection.py:963:    res = testdir.runpytest("--continue-on-collection-errors", "--maxfail=3")
+./testing/test_debugging.py:107:    def test_pdb_on_xfail(self, testdir, pdblist):
+./testing/test_debugging.py:112:            @pytest.mark.xfail
+./testing/test_debugging.py:117:        assert "xfail" in rep.keywords
+./testing/test_terminal.py:1222:    def test_maxfailures(self, testdir, option):
+./testing/test_terminal.py:1233:        result = testdir.runpytest("--maxfail=2", *option.args)
+./testing/test_terminal.py:1243:    def test_maxfailures_with_interrupted(self, testdir):
+./testing/test_terminal.py:1251:        result = testdir.runpytest("--maxfail=1", "-ra")
+./testing/test_terminal.py:1420:@pytest.mark.xfail("not hasattr(os, 'dup')")
+./testing/test_terminal.py:1636:        ("yellow", [("1 xfailed", {"bold": True, "yellow": True})], {"xfailed": (1,)}),
+./testing/test_terminal.py:1641:                ("1 xfailed", {"bold": False, "yellow": True}),
+./testing/test_terminal.py:1643:            {"xfailed": (1,), "passed": (1,)},
+./testing/test_terminal.py:1669:                ("3 xfailed", {"bold": False, "yellow": True}),
+./testing/test_terminal.py:1671:            {"passed": (1, 2), "failed": (1,), "xfailed": (1, 2, 3)},
+./testing/test_terminal.py:1679:                ("2 xfailed", {"bold": False, "yellow": True}),
+./testing/test_terminal.py:1685:                "xfailed": (1, 2),
+./testing/test_terminal.py:1832:            test_axfail="""
+./testing/test_terminal.py:1834:                @pytest.mark.xfail
+./testing/test_terminal.py:1835:                def test_axfail(): assert 0
+./testing/test_terminal.py:1860:                    r"test_axfail.py {yellow}x{reset}{green} \s+ \[  4%\]{reset}",
+./testing/test_terminal.py:1868:        # Only xfail should have yellow progress indicator.
+./testing/test_terminal.py:1869:        result = testdir.runpytest("test_axfail.py")
+./testing/test_terminal.py:1873:                    r"test_axfail.py {yellow}x{reset}{yellow} \s+ \[100%\]{reset}",
+./testing/test_terminal.py:1874:                    r"^{yellow}=+ ({yellow}{bold}|{bold}{yellow})1 xfailed{reset}{yellow} in ",
+./testing/test_resultlog.py:86:            @pytest.mark.xfail
+./testing/test_resultlog.py:87:            def test_xfail(): raise ValueError("XFAIL")
+./testing/test_resultlog.py:88:            @pytest.mark.xfail
+./testing/test_resultlog.py:144:        @pytest.mark.xfail
+./testing/test_resultlog.py:145:        def test_xfail():
+./testing/test_resultlog.py:147:        @pytest.mark.xfail(run=False)
+./testing/test_resultlog.py:148:        def test_xfail_norun():
+./testing/test_resultlog.py:159:            "x *:test_xfail",
+./testing/test_resultlog.py:160:            "x *:test_xfail_norun",
+./testing/test_session.py:88:    def test_maxfail(self, testdir):
+./testing/test_session.py:95:            "--maxfail=2",
+./testing/test_session.py:240:    def test_minus_x_overridden_by_maxfail(self, testdir):
+./testing/test_session.py:243:        reprec = testdir.inline_run("-x", "--maxfail=2", testdir.tmpdir)
+./testing/test_capture.py:167:    @pytest.mark.xfail(reason="unimplemented feature")
+./testing/test_stepwise.py:180:def test_xfail_handling(testdir, monkeypatch):
+./testing/test_stepwise.py:181:    """Ensure normal xfail is ignored, and strict xfail interrupts the session in sw mode
+./testing/test_stepwise.py:191:        @pytest.mark.xfail(strict={strict})
+./testing/test_stepwise.py:205:            "* 3 passed, 1 xfailed in *",
+./testing/test_stepwise.py:227:            "* 2 passed, 1 deselected, 1 xfailed in *",
+./testing/test_unittest.py:405:        pytestmark = pytest.mark.xfail
+./testing/test_unittest.py:457:                @pytest.mark.xfail(reason="iwanto")
+./testing/test_unittest.py:461:                    pytest.xfail("i2wanto")
+./testing/test_unittest.py:491:                "*1 failed*4 skipped*3 xfailed*",
+./testing/test_unittest.py:738:def test_unittest_expected_failure_for_failing_test_is_xfail(testdir, runner):
+./testing/test_unittest.py:744:            def test_failing_test_is_xfail(self):
+./testing/test_unittest.py:753:            ["*XFAIL*MyTestCase*test_failing_test_is_xfail*", "*1 xfailed*"]
+./testing/test_doctest.py:212:            test_xfail="""
+./testing/test_doctest.py:214:            >>> pytest.xfail("xfail_reason")
+./testing/test_doctest.py:232:                "test_xfail.txt x *",
+./testing/test_doctest.py:234:                "*= 2 skipped, 1 xfailed in *",
+./testing/test_doctest.py:1056:            pytest.param("'3.1416'", "'3.14'", marks=pytest.mark.xfail),  # type: ignore
+./testing/python/metafunc.py:1627:    def test_simple_xfail(self, testdir: Testdir) -> None:
+./testing/python/metafunc.py:1633:                pytest.param(1, 3, marks=pytest.mark.xfail),
+./testing/python/metafunc.py:1641:        # xfail is skip??
+./testing/python/metafunc.py:1644:    def test_simple_xfail_single_argname(self, testdir: Testdir) -> None:
+./testing/python/metafunc.py:1650:                pytest.param(3, marks=pytest.mark.xfail),
+./testing/python/metafunc.py:1660:    def test_xfail_with_arg(self, testdir: Testdir) -> None:
+./testing/python/metafunc.py:1666:                pytest.param(1, 3, marks=pytest.mark.xfail("True")),
+./testing/python/metafunc.py:1676:    def test_xfail_with_kwarg(self, testdir: Testdir) -> None:
+./testing/python/metafunc.py:1682:                pytest.param(1, 3, marks=pytest.mark.xfail(reason="some bug")),
+./testing/python/metafunc.py:1692:    def test_xfail_with_arg_and_kwarg(self, testdir: Testdir) -> None:
+./testing/python/metafunc.py:1698:                pytest.param(1, 3, marks=pytest.mark.xfail("True", reason="some bug")),
+./testing/python/metafunc.py:1709:    def test_xfail_passing_is_xpass(self, testdir: Testdir, strict: bool) -> None:
+./testing/python/metafunc.py:1713:            m = pytest.mark.xfail("sys.version_info > (0, 0, 0)", reason="some bug", strict={strict})
+./testing/python/metafunc.py:1741:                testData = passingTestData + [pytest.param(*d, marks=pytest.mark.xfail)
+./testing/python/metafunc.py:1779:                    marks=pytest.mark.xfail("sys.version_info > (0, 0, 0)", reason="some bug", strict={strict}),
+./testing/python/metafunc.py:1783:                    marks=[pytest.mark.xfail("sys.version_info > (0, 0, 0)", reason="some bug", strict={strict})],
+./testing/python/fixtures.py:550:            pytest.xfail("this test is flaky when executed with xdist")
+./testing/python/fixtures.py:950:        assert "xfail" not in item1.keywords
+./testing/python/fixtures.py:951:        req1.applymarker(pytest.mark.xfail)
+./testing/python/fixtures.py:952:        assert "xfail" in item1.keywords
+./testing/python/fixtures.py:1657:    @pytest.mark.xfail(reason="'enabled' feature not implemented")
+./testing/python/collect.py:620:    def test_parametrize_xfail(self, testdir):
+./testing/python/collect.py:625:            m = pytest.mark.xfail('True')
+./testing/python/collect.py:628:            def test_xfail(x):
+./testing/python/collect.py:633:        result.stdout.fnmatch_lines(["* 2 passed, 1 xfailed in *"])
+./testing/python/collect.py:640:            m = pytest.mark.xfail('True')
+./testing/python/collect.py:643:            def test_xfail(x):
+./testing/python/collect.py:650:    def test_parametrize_xfail_passed(self, testdir):
+./testing/python/collect.py:655:            m = pytest.mark.xfail('False')
+grep: ./.git/index: binary file matches
+grep: ./.git/objects/pack/pack-e688a759c01575a72dc5aa2c89f9234dccf06733.pack: binary file matches
+./src/_pytest/runner.py:223:    if hasattr(report, "wasxfail"):
+./src/_pytest/unittest.py:26:from _pytest.outcomes import xfail
+./src/_pytest/unittest.py:228:            xfail(str(reason))
+./src/_pytest/unittest.py:229:        except xfail.Exception:
+./src/_pytest/outcomes.py:160:    """ raised from an explicit call to pytest.xfail() """
+./src/_pytest/outcomes.py:164:def xfail(reason: str = "") -> "NoReturn":
+./src/_pytest/outcomes.py:166:    Imperatively xfail an executing test or setup functions with the given reason.
+./src/_pytest/outcomes.py:171:        It is better to use the :ref:`pytest.mark.xfail ref` marker when possible to declare a test to be
+./src/_pytest/outcomes.py:172:        xfailed under certain conditions like known bugs or missing features.
+./src/_pytest/mark/structures.py:58:    elif requested_mark == "xfail":
+./src/_pytest/mark/structures.py:59:        mark = MARK_GEN.xfail(reason=reason, run=False)
+./src/_pytest/mark/structures.py:475:        xfail = cast(_XfailMarkDecorator, None)
+./src/_pytest/mark/__init__.py:52:            [("3+5", 8), pytest.param("6*9", 42, marks=pytest.mark.xfail),],
+./src/_pytest/mark/__init__.py:269:    if empty_parameterset not in ("skip", "xfail", "fail_at_collect", None, ""):
+./src/_pytest/mark/__init__.py:271:            "{!s} must be one of skip, xfail or fail_at_collect"
+./src/_pytest/junitxml.py:217:        if hasattr(report, "wasxfail"):
+./src/_pytest/junitxml.py:218:            self._add_simple(Junit.skipped, "xfail-marked test passes unexpectedly")
+./src/_pytest/junitxml.py:254:        if hasattr(report, "wasxfail"):
+./src/_pytest/junitxml.py:255:            xfailreason = report.wasxfail
+./src/_pytest/junitxml.py:256:            if xfailreason.startswith("reason: "):
+./src/_pytest/junitxml.py:257:                xfailreason = xfailreason[8:]
+./src/_pytest/junitxml.py:260:                    "", type="pytest.xfail", message=bin_xml_escape(xfailreason)
+./src/_pytest/main.py:67:        dest="maxfail",
+./src/_pytest/main.py:72:        "--maxfail",
+./src/_pytest/main.py:76:        dest="maxfail",
+./src/_pytest/main.py:485:        if report.failed and not hasattr(report, "wasxfail"):
+./src/_pytest/main.py:487:            maxfail = self.config.getvalue("maxfail")
+./src/_pytest/main.py:488:            if maxfail and self.testsfailed >= maxfail:
+./src/_pytest/helpconfig.py:92:        help='override ini option with "option=value" style, e.g. `-o xfail_strict=True -o cache_dir=cache`.',
+./src/_pytest/python.py:242:                res.add_marker(MARK_GEN.xfail(run=False, reason=reason))
+./src/_pytest/pytester.py:494:        xfailed: int = 0,
+./src/_pytest/pytester.py:508:            "xfailed": d.get("xfailed", 0),
+./src/_pytest/pytester.py:516:            "xfailed": xfailed,
+./src/_pytest/skipping.py:1:""" support for skip/xfail functions and markers. """
+./src/_pytest/skipping.py:20:from _pytest.outcomes import xfail
+./src/_pytest/skipping.py:32:        "--runxfail",
+./src/_pytest/skipping.py:34:        dest="runxfail",
+./src/_pytest/skipping.py:36:        help="report the results of xfail tests as if they were not marked",
+./src/_pytest/skipping.py:40:        "xfail_strict",
+./src/_pytest/skipping.py:41:        "default for the strict parameter of xfail "
+./src/_pytest/skipping.py:49:    if config.option.runxfail:
+./src/_pytest/skipping.py:53:        old = pytest.xfail
+./src/_pytest/skipping.py:54:        config._cleanup.append(lambda: setattr(pytest, "xfail", old))
+./src/_pytest/skipping.py:59:        nop.Exception = xfail.Exception  # type: ignore[attr-defined]
+./src/_pytest/skipping.py:60:        setattr(pytest, "xfail", nop)
+./src/_pytest/skipping.py:77:        "xfail(condition, ..., *, reason=..., run=True, raises=None, strict=xfail_strict): "
+./src/_pytest/skipping.py:83:        "a true failure. See https://docs.pytest.org/en/stable/reference.html#pytest-mark-xfail",
+./src/_pytest/skipping.py:88:    """Evaluate a single skipif/xfail condition.
+./src/_pytest/skipping.py:192:    """The result of evaluate_xfail_marks()."""
+./src/_pytest/skipping.py:200:def evaluate_xfail_marks(item: Item) -> Optional[Xfail]:
+./src/_pytest/skipping.py:201:    """Evaluate xfail marks on item, returning Xfail if triggered."""
+./src/_pytest/skipping.py:202:    for mark in item.iter_markers(name="xfail"):
+./src/_pytest/skipping.py:204:        strict = mark.kwargs.get("strict", item.config.getini("xfail_strict"))
+./src/_pytest/skipping.py:227:# Saves the xfail mark evaluation. Can be refreshed during call if None.
+./src/_pytest/skipping.py:228:xfailed_key = StoreKey[Optional[Xfail]]()
+./src/_pytest/skipping.py:241:    if not item.config.option.runxfail:
+./src/_pytest/skipping.py:242:        item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+./src/_pytest/skipping.py:243:        if xfailed and not xfailed.run:
+./src/_pytest/skipping.py:244:            xfail("[NOTRUN] " + xfailed.reason)
+./src/_pytest/skipping.py:249:    xfailed = item._store.get(xfailed_key, None)
+./src/_pytest/skipping.py:250:    if xfailed is None:
+./src/_pytest/skipping.py:251:        item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+./src/_pytest/skipping.py:253:    if not item.config.option.runxfail:
+./src/_pytest/skipping.py:254:        if xfailed and not xfailed.run:
+./src/_pytest/skipping.py:255:            xfail("[NOTRUN] " + xfailed.reason)
+./src/_pytest/skipping.py:264:    xfailed = item._store.get(xfailed_key, None)
+./src/_pytest/skipping.py:273:    elif item.config.option.runxfail:
+./src/_pytest/skipping.py:275:    elif call.excinfo and isinstance(call.excinfo.value, xfail.Exception):
+./src/_pytest/skipping.py:277:        rep.wasxfail = "reason: " + call.excinfo.value.msg
+./src/_pytest/skipping.py:279:    elif not rep.skipped and xfailed:
+./src/_pytest/skipping.py:281:            raises = xfailed.raises
+./src/_pytest/skipping.py:286:                rep.wasxfail = xfailed.reason
+./src/_pytest/skipping.py:288:            if xfailed.strict:
+./src/_pytest/skipping.py:290:                rep.longrepr = "[XPASS(strict)] " + xfailed.reason
+./src/_pytest/skipping.py:293:                rep.wasxfail = xfailed.reason
+./src/_pytest/skipping.py:310:    if hasattr(report, "wasxfail"):
+./src/_pytest/skipping.py:312:            return "xfailed", "x", "XFAIL"
+./src/_pytest/terminal.py:63:    "xfailed",
+./src/_pytest/terminal.py:400:        char = {"xfailed": "x", "skipped": "s"}.get(char, char)
+./src/_pytest/terminal.py:541:            was_xfail = hasattr(report, "wasxfail")
+./src/_pytest/terminal.py:542:            if rep.passed and not was_xfail:
+./src/_pytest/terminal.py:544:            elif rep.passed and was_xfail:
+./src/_pytest/terminal.py:1098:        def show_xfailed(lines: List[str]) -> None:
+./src/_pytest/terminal.py:1099:            xfailed = self.stats.get("xfailed", [])
+./src/_pytest/terminal.py:1100:            for rep in xfailed:
+./src/_pytest/terminal.py:1104:                reason = rep.wasxfail
+./src/_pytest/terminal.py:1113:                reason = rep.wasxfail
+./src/_pytest/terminal.py:1134:            "x": show_xfailed,
+./src/pytest/__init__.py:31:from _pytest.outcomes import xfail
+./src/pytest/__init__.py:97:    "xfail",
+./CONTRIBUTING.rst:43:(xfail), that is a very useful commit to make as well, even if you cannot
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll inspect src/_pytest/skipping.py around the xfail evaluation and related store logic to see why dynamically-added xfail markers during test execution aren't being honored.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/_pytest/skipping.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+     1  """ support for skip/xfail functions and markers. """
+     2  import os
+     3  import platform
+     4  import sys
+     5  import traceback
+     6  from typing import Generator
+     7  from typing import Optional
+     8  from typing import Tuple
+        
+     9  import attr
+        
+    10  from _pytest.compat import TYPE_CHECKING
+    11  from _pytest.config import Config
+    12  from _pytest.config import hookimpl
+    13  from _pytest.config.argparsing import Parser
+    14  from _pytest.mark.structures import Mark
+    15  from _pytest.nodes import Item
+    16  from _pytest.outcomes import fail
+    17  from _pytest.outcomes import skip
+    18  from _pytest.outcomes import xfail
+    19  from _pytest.reports import BaseReport
+    20  from _pytest.runner import CallInfo
+    21  from _pytest.store import StoreKey
+        
+    22  if TYPE_CHECKING:
+    23      from typing import Type
+        
+        
+    24  def pytest_addoption(parser: Parser) -> None:
+    25      group = parser.getgroup("general")
+    26      group.addoption(
+    27          "--runxfail",
+    28          action="store_true",
+    29          dest="runxfail",
+    30          default=False,
+    31          help="report the results of xfail tests as if they were not marked",
+    32      )
+        
+    33      parser.addini(
+    34          "xfail_strict",
+    35          "default for the strict parameter of xfail "
+    36          "markers when not given explicitly (default: False)",
+    37          default=False,
+    38          type="bool",
+    39      )
+        
+        
+    40  def pytest_configure(config: Config) -> None:
+    41      if config.option.runxfail:
+    42          # yay a hack
+    43          import pytest
+        
+    44          old = pytest.xfail
+    45          config._cleanup.append(lambda: setattr(pytest, "xfail", old))
+        
+    46          def nop(*args, **kwargs):
+    47              pass
+        
+    48          nop.Exception = xfail.Exception  # type: ignore[attr-defined]
+    49          setattr(pytest, "xfail", nop)
+        
+    50      config.addinivalue_line(
+    51          "markers",
+    52          "skip(reason=None): skip the given test function with an optional reason. "
+    53          'Example: skip(reason="no way of currently testing this") skips the '
+    54          "test.",
+    55      )
+    56      config.addinivalue_line(
+    57          "markers",
+    58          "skipif(condition, ..., *, reason=...): "
+    59          "skip the given test function if any of the conditions evaluate to True. "
+    60          "Example: skipif(sys.platform == 'win32') skips the test if we are on the win32 platform. "
+    61          "See https://docs.pytest.org/en/stable/reference.html#pytest-mark-skipif",
+    62      )
+    63      config.addinivalue_line(
+    64          "markers",
+    65          "xfail(condition, ..., *, reason=..., run=True, raises=None, strict=xfail_strict): "
+    66          "mark the test function as an expected failure if any of the conditions "
+    67          "evaluate to True. Optionally specify a reason for better reporting "
+    68          "and run=False if you don't even want to execute the test function. "
+    69          "If only specific exception(s) are expected, you can list them in "
+    70          "raises, and if the test fails in other ways, it will be reported as "
+    71          "a true failure. See https://docs.pytest.org/en/stable/reference.html#pytest-mark-xfail",
+    72      )
+        
+        
+    73  def evaluate_condition(item: Item, mark: Mark, condition: object) -> Tuple[bool, str]:
+    74      """Evaluate a single skipif/xfail condition.
+        
+    75      If an old-style string condition is given, it is eval()'d, otherwise the
+    76      condition is bool()'d. If this fails, an appropriately formatted pytest.fail
+    77      is raised.
+        
+    78      Returns (result, reason). The reason is only relevant if the result is True.
+    79      """
+    80      # String condition.
+    81      if isinstance(condition, str):
+    82          globals_ = {
+    83              "os": os,
+    84              "sys": sys,
+    85              "platform": platform,
+    86              "config": item.config,
+    87          }
+    88          if hasattr(item, "obj"):
+    89              globals_.update(item.obj.__globals__)  # type: ignore[attr-defined]
+    90          try:
+    91              filename = "<{} condition>".format(mark.name)
+    92              condition_code = compile(condition, filename, "eval")
+    93              result = eval(condition_code, globals_)
+    94          except SyntaxError as exc:
+    95              msglines = [
+    96                  "Error evaluating %r condition" % mark.name,
+    97                  "    " + condition,
+    98                  "    " + " " * (exc.offset or 0) + "^",
+    99                  "SyntaxError: invalid syntax",
+   100              ]
+   101              fail("\n".join(msglines), pytrace=False)
+   102          except Exception as exc:
+   103              msglines = [
+   104                  "Error evaluating %r condition" % mark.name,
+   105                  "    " + condition,
+   106                  *traceback.format_exception_only(type(exc), exc),
+   107              ]
+   108              fail("\n".join(msglines), pytrace=False)
+        
+   109      # Boolean condition.
+   110      else:
+   111          try:
+   112              result = bool(condition)
+   113          except Exception as exc:
+   114              msglines = [
+   115                  "Error evaluating %r condition as a boolean" % mark.name,
+   116                  *traceback.format_exception_only(type(exc), exc),
+   117              ]
+   118              fail("\n".join(msglines), pytrace=False)
+        
+   119      reason = mark.kwargs.get("reason", None)
+   120      if reason is None:
+   121          if isinstance(condition, str):
+   122              reason = "condition: " + condition
+   123          else:
+   124              # XXX better be checked at collection time
+   125              msg = (
+   126                  "Error evaluating %r: " % mark.name
+   127                  + "you need to specify reason=STRING when using booleans as conditions."
+   128              )
+   129              fail(msg, pytrace=False)
+        
+   130      return result, reason
+        
+        
+   131  @attr.s(slots=True, frozen=True)
+   132  class Skip:
+   133      """The result of evaluate_skip_marks()."""
+        
+   134      reason = attr.ib(type=str)
+        
+        
+   135  def evaluate_skip_marks(item: Item) -> Optional[Skip]:
+   136      """Evaluate skip and skipif marks on item, returning Skip if triggered."""
+   137      for mark in item.iter_markers(name="skipif"):
+   138          if "condition" not in mark.kwargs:
+   139              conditions = mark.args
+   140          else:
+   141              conditions = (mark.kwargs["condition"],)
+        
+   142          # Unconditional.
+   143          if not conditions:
+   144              reason = mark.kwargs.get("reason", "")
+   145              return Skip(reason)
+        
+   146          # If any of the conditions are true.
+   147          for condition in conditions:
+   148              result, reason = evaluate_condition(item, mark, condition)
+   149              if result:
+   150                  return Skip(reason)
+        
+   151      for mark in item.iter_markers(name="skip"):
+   152          if "reason" in mark.kwargs:
+   153              reason = mark.kwargs["reason"]
+   154          elif mark.args:
+   155              reason = mark.args[0]
+   156          else:
+   157              reason = "unconditional skip"
+   158          return Skip(reason)
+        
+   159      return None
+        
+        
+   160  @attr.s(slots=True, frozen=True)
+   161  class Xfail:
+   162      """The result of evaluate_xfail_marks()."""
+        
+   163      reason = attr.ib(type=str)
+   164      run = attr.ib(type=bool)
+   165      strict = attr.ib(type=bool)
+   166      raises = attr.ib(type=Optional[Tuple["Type[BaseException]", ...]])
+        
+        
+   167  def evaluate_xfail_marks(item: Item) -> Optional[Xfail]:
+   168      """Evaluate xfail marks on item, returning Xfail if triggered."""
+   169      for mark in item.iter_markers(name="xfail"):
+   170          run = mark.kwargs.get("run", True)
+   171          strict = mark.kwargs.get("strict", item.config.getini("xfail_strict"))
+   172          raises = mark.kwargs.get("raises", None)
+   173          if "condition" not in mark.kwargs:
+   174              conditions = mark.args
+   175          else:
+   176              conditions = (mark.kwargs["condition"],)
+        
+   177          # Unconditional.
+   178          if not conditions:
+   179              reason = mark.kwargs.get("reason", "")
+   180              return Xfail(reason, run, strict, raises)
+        
+   181          # If any of the conditions are true.
+   182          for condition in conditions:
+   183              result, reason = evaluate_condition(item, mark, condition)
+   184              if result:
+   185                  return Xfail(reason, run, strict, raises)
+        
+   186      return None
+        
+        
+   187  # Whether skipped due to skip or skipif marks.
+   188  skipped_by_mark_key = StoreKey[bool]()
+   189  # Saves the xfail mark evaluation. Can be refreshed during call if None.
+   190  xfailed_key = StoreKey[Optional[Xfail]]()
+   191  unexpectedsuccess_key = StoreKey[str]()
+        
+        
+   192  @hookimpl(tryfirst=True)
+   193  def pytest_runtest_setup(item: Item) -> None:
+   194      item._store[skipped_by_mark_key] = False
+        
+   195      skipped = evaluate_skip_marks(item)
+   196      if skipped:
+   197          item._store[skipped_by_mark_key] = True
+   198          skip(skipped.reason)
+        
+   199      if not item.config.option.runxfail:
+   200          item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+   201          if xfailed and not xfailed.run:
+   202              xfail("[NOTRUN] " + xfailed.reason)
+        
+        
+   203  @hookimpl(hookwrapper=True)
+   204  def pytest_runtest_call(item: Item) -> Generator[None, None, None]:
+   205      xfailed = item._store.get(xfailed_key, None)
+   206      if xfailed is None:
+   207          item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+        
+   208      if not item.config.option.runxfail:
+   209          if xfailed and not xfailed.run:
+   210              xfail("[NOTRUN] " + xfailed.reason)
+        
+   211      yield
+        
+        
+   212  @hookimpl(hookwrapper=True)
+   213  def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+   214      outcome = yield
+   215      rep = outcome.get_result()
+   216      xfailed = item._store.get(xfailed_key, None)
+   217      # unittest special case, see setting of unexpectedsuccess_key
+   218      if unexpectedsuccess_key in item._store and rep.when == "call":
+   219          reason = item._store[unexpectedsuccess_key]
+   220          if reason:
+   221              rep.longrepr = "Unexpected success: {}".format(reason)
+   222          else:
+   223              rep.longrepr = "Unexpected success"
+   224          rep.outcome = "failed"
+   225      elif item.config.option.runxfail:
+   226          pass  # don't interfere
+   227      elif call.excinfo and isinstance(call.excinfo.value, xfail.Exception):
+   228          assert call.excinfo.value.msg is not None
+   229          rep.wasxfail = "reason: " + call.excinfo.value.msg
+   230          rep.outcome = "skipped"
+   231      elif not rep.skipped and xfailed:
+   232          if call.excinfo:
+   233              raises = xfailed.raises
+   234              if raises is not None and not isinstance(call.excinfo.value, raises):
+   235                  rep.outcome = "failed"
+   236              else:
+   237                  rep.outcome = "skipped"
+   238                  rep.wasxfail = xfailed.reason
+   239          elif call.when == "call":
+   240              if xfailed.strict:
+   241                  rep.outcome = "failed"
+   242                  rep.longrepr = "[XPASS(strict)] " + xfailed.reason
+   243              else:
+   244                  rep.outcome = "passed"
+   245                  rep.wasxfail = xfailed.reason
+        
+   246      if (
+   247          item._store.get(skipped_by_mark_key, True)
+   248          and rep.skipped
+   249          and type(rep.longrepr) is tuple
+   250      ):
+   251          # skipped by mark.skipif; change the location of the failure
+   252          # to point to the item definition, otherwise it will display
+   253          # the location of where the skip exception was raised within pytest
+   254          _, _, reason = rep.longrepr
+   255          filename, line = item.reportinfo()[:2]
+   256          assert line is not None
+   257          rep.longrepr = str(filename), line + 1, reason
+        
+        
+   258  def pytest_report_teststatus(report: BaseReport) -> Optional[Tuple[str, str, str]]:
+   259      if hasattr(report, "wasxfail"):
+   260          if report.skipped:
+   261              return "xfailed", "x", "XFAIL"
+   262          elif report.passed:
+   263              return "xpassed", "X", "XPASS"
+   264      return None
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I will check the file's indentation style before making a small, targeted edit to pytest_runtest_call so we preserve exact whitespace.  
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+src/_pytest/skipping.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I will insert a refresh of the stored xfail evaluation in pytest_runtest_makereport so markers added during test execution (e.g., via request.node.add_marker) are picked up when reporting.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+src/_pytest/skipping.py
+----ARG----
+from_line
+213
+----ARG----
+to_line
+231
+----ARG----
+content
+@hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+    outcome = yield
+    rep = outcome.get_result()
+    xfailed = item._store.get(xfailed_key, None)
+    # If the xfail evaluation was not done earlier (or was None), refresh it here
+    # so markers added during test execution are recognized.
+    if xfailed is None:
+        xfailed = evaluate_xfail_marks(item)
+        item._store[xfailed_key] = xfailed
+    # unittest special case, see setting of unexpectedsuccess_key
+    if unexpectedsuccess_key in item._store and rep.when == "call":
+        reason = item._store[unexpectedsuccess_key]
+        if reason:
+            rep.longrepr = "Unexpected success: {}".format(reason)
+        else:
+            rep.longrepr = "Unexpected success"
+        rep.outcome = "failed"
+    elif item.config.option.runxfail:
+        pass  # don't interfere
+    elif call.excinfo and isinstance(call.excinfo.value, xfail.Exception):
+        assert call.excinfo.value.msg is not None
+        rep.wasxfail = "reason: " + call.excinfo.value.msg
+        rep.outcome = "skipped"
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+✓ Successfully replaced lines 213-231 in src/_pytest/skipping.py. Replaced 19 lines with 24 lines (net change: +5 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 321 total lines.
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I re-read the modified region to verify the change was applied correctly and indentation matches the file.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/_pytest/skipping.py
+----ARG----
+start_line
+200
+----ARG----
+end_line
+320
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+   200  def evaluate_xfail_marks(item: Item) -> Optional[Xfail]:
+   201      """Evaluate xfail marks on item, returning Xfail if triggered."""
+   202      for mark in item.iter_markers(name="xfail"):
+   203          run = mark.kwargs.get("run", True)
+   204          strict = mark.kwargs.get("strict", item.config.getini("xfail_strict"))
+   205          raises = mark.kwargs.get("raises", None)
+   206          if "condition" not in mark.kwargs:
+   207              conditions = mark.args
+   208          else:
+   209              conditions = (mark.kwargs["condition"],)
+        
+   210          # Unconditional.
+   211          if not conditions:
+   212  @hookimpl(hookwrapper=True)
+   213  def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+   214      outcome = yield
+   215      rep = outcome.get_result()
+   216      xfailed = item._store.get(xfailed_key, None)
+   217      # If the xfail evaluation was not done earlier (or was None), refresh it here
+   218      # so markers added during test execution are recognized.
+   219      if xfailed is None:
+   220          xfailed = evaluate_xfail_marks(item)
+   221          item._store[xfailed_key] = xfailed
+   222      # unittest special case, see setting of unexpectedsuccess_key
+   223      if unexpectedsuccess_key in item._store and rep.when == "call":
+   224          reason = item._store[unexpectedsuccess_key]
+   225          if reason:
+   226              rep.longrepr = "Unexpected success: {}".format(reason)
+   227          else:
+   228              rep.longrepr = "Unexpected success"
+   229          rep.outcome = "failed"
+   230      elif item.config.option.runxfail:
+   231          pass  # don't interfere
+   232      elif call.excinfo and isinstance(call.excinfo.value, xfail.Exception):
+   233          assert call.excinfo.value.msg is not None
+   234          rep.wasxfail = "reason: " + call.excinfo.value.msg
+   235          rep.outcome = "skipped"
+   236  @hookimpl(tryfirst=True)
+   237  def pytest_runtest_setup(item: Item) -> None:
+   238      item._store[skipped_by_mark_key] = False
+        
+   239      skipped = evaluate_skip_marks(item)
+   240      if skipped:
+   241          item._store[skipped_by_mark_key] = True
+   242          skip(skipped.reason)
+        
+   243      if not item.config.option.runxfail:
+   244          item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+   245          if xfailed and not xfailed.run:
+   246              xfail("[NOTRUN] " + xfailed.reason)
+        
+        
+   247  @hookimpl(hookwrapper=True)
+   248  def pytest_runtest_call(item: Item) -> Generator[None, None, None]:
+   249      xfailed = item._store.get(xfailed_key, None)
+   250      if xfailed is None:
+   251          item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+        
+   252      if not item.config.option.runxfail:
+   253          if xfailed and not xfailed.run:
+   254              xfail("[NOTRUN] " + xfailed.reason)
+        
+   255      yield
+        
+        
+   256  @hookimpl(hookwrapper=True)
+   257  def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+   258      outcome = yield
+   259      rep = outcome.get_result()
+   260      xfailed = item._store.get(xfailed_key, None)
+   261      # unittest special case, see setting of unexpectedsuccess_key
+   262      if unexpectedsuccess_key in item._store and rep.when == "call":
+   263          reason = item._store[unexpectedsuccess_key]
+   264          if reason:
+   265              rep.longrepr = "Unexpected success: {}".format(reason)
+   266          else:
+   267              rep.longrepr = "Unexpected success"
+   268          rep.outcome = "failed"
+   269      elif item.config.option.runxfail:
+   270          pass  # don't interfere
+   271      elif call.excinfo and isinstance(call.excinfo.value, xfail.Exception):
+   272          assert call.excinfo.value.msg is not None
+   273          rep.wasxfail = "reason: " + call.excinfo.value.msg
+   274          rep.outcome = "skipped"
+   275      elif not rep.skipped and xfailed:
+   276          if call.excinfo:
+   277              raises = xfailed.raises
+   278              if raises is not None and not isinstance(call.excinfo.value, raises):
+   279                  rep.outcome = "failed"
+   280              else:
+   281                  rep.outcome = "skipped"
+   282                  rep.wasxfail = xfailed.reason
+   283          elif call.when == "call":
+   284              if xfailed.strict:
+   285                  rep.outcome = "failed"
+   286                  rep.longrepr = "[XPASS(strict)] " + xfailed.reason
+   287              else:
+   288                  rep.outcome = "passed"
+   289                  rep.wasxfail = xfailed.reason
+        
+   290      if (
+   291          item._store.get(skipped_by_mark_key, True)
+   292          and rep.skipped
+   293          and type(rep.longrepr) is tuple
+   294      ):
+   295          # skipped by mark.skipif; change the location of the failure
+   296          # to point to the item definition, otherwise it will display
+   297          # the location of where the skip exception was raised within pytest
+   298          _, _, reason = rep.longrepr
+   299          filename, line = item.reportinfo()[:2]
+   300          assert line is not None
+   301          rep.longrepr = str(filename), line + 1, reason
+        
+        
+   302  def pytest_report_teststatus(report: BaseReport) -> Optional[Tuple[str, str, str]]:
+   303      if hasattr(report, "wasxfail"):
+   304          if report.skipped:
+   305              return "xfailed", "x", "XFAIL"
+   306          elif report.passed:
+   307              return "xpassed", "X", "XPASS"
+   308      return None
+
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+I'll show the git diff now so we can verify the changes to src/_pytest/skipping.py before running syntax checks and finishing.
+----BEGIN_FUNCTION_CALL----
+git_diff
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+index 335e10996..5cc990ffd 100644
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -210,25 +210,30 @@ def evaluate_xfail_marks(item: Item) -> Optional[Xfail]:
+ 
+         # Unconditional.
+         if not conditions:
+-            reason = mark.kwargs.get("reason", "")
+-            return Xfail(reason, run, strict, raises)
+-
+-        # If any of the conditions are true.
+-        for condition in conditions:
+-            result, reason = evaluate_condition(item, mark, condition)
+-            if result:
+-                return Xfail(reason, run, strict, raises)
+-
+-    return None
+-
+-
+-# Whether skipped due to skip or skipif marks.
+-skipped_by_mark_key = StoreKey[bool]()
+-# Saves the xfail mark evaluation. Can be refreshed during call if None.
+-xfailed_key = StoreKey[Optional[Xfail]]()
+-unexpectedsuccess_key = StoreKey[str]()
+-
+-
++@hookimpl(hookwrapper=True)
++def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
++    outcome = yield
++    rep = outcome.get_result()
++    xfailed = item._store.get(xfailed_key, None)
++    # If the xfail evaluation was not done earlier (or was None), refresh it here
++    # so markers added during test execution are recognized.
++    if xfailed is None:
++        xfailed = evaluate_xfail_marks(item)
++        item._store[xfailed_key] = xfailed
++    # unittest special case, see setting of unexpectedsuccess_key
++    if unexpectedsuccess_key in item._store and rep.when == "call":
++        reason = item._store[unexpectedsuccess_key]
++        if reason:
++            rep.longrepr = "Unexpected success: {}".format(reason)
++        else:
++            rep.longrepr = "Unexpected success"
++        rep.outcome = "failed"
++    elif item.config.option.runxfail:
++        pass  # don't interfere
++    elif call.excinfo and isinstance(call.excinfo.value, xfail.Exception):
++        assert call.excinfo.value.msg is not None
++        rep.wasxfail = "reason: " + call.excinfo.value.msg
++        rep.outcome = "skipped"
+ @hookimpl(tryfirst=True)
+ def pytest_runtest_setup(item: Item) -> None:
+     item._store[skipped_by_mark_key] = False
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I'll run a repository-wide syntax check for modified Python files to ensure the edit didn't introduce indentation or syntax errors before finishing.
+----BEGIN_FUNCTION_CALL----
+check_repo_syntax
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+✓ All checked Python files have valid syntax
+

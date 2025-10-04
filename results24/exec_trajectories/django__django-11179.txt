@@ -468,3 +468,227 @@ end_line
    294                                         {field.name: value}, self.using)
 
 
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I will search the repository for where instance PKs are cleared (e.g., "pk = None") to find the missing behavior and locate where to add/update the clearing logic. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+pk = None
+----ARG----
+directory
+.
+----ARG----
+use_regex
+false
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+./tests/extra_regress/models.py:24:        new_revision.pk = None
+./django/contrib/auth/models.py:366:    pk = None
+./django/db/models/sql/compiler.py:141:            pk = None
+./django/db/models/options.py:104:        self.pk = None
+./docs/topics/db/queries.txt:960:    blog.pk = None
+./docs/topics/db/queries.txt:974:    django_blog.pk = None
+./docs/topics/db/queries.txt:985:    entry.pk = None
+./docs/topics/db/queries.txt:994:    detail.pk = None
+./docs/topics/db/multi-db.txt:506:    >>> p.pk = None # Clear the primary key.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I will inspect the remainder of django/db/models/deletion.py to find where instance PKs are cleared in the normal deletion flow so I can adjust the fast-delete path to also clear the instance PK. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/models/deletion.py
+----ARG----
+start_line
+300
+----ARG----
+end_line
+420
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+   300                                         {field.name: value}, self.using)
+        
+   301              # reverse instance collections
+   302              for instances in self.data.values():
+   303                  instances.reverse()
+        
+   304              # delete instances
+   305              for model, instances in self.data.items():
+   306                  query = sql.DeleteQuery(model)
+   307                  pk_list = [obj.pk for obj in instances]
+   308                  count = query.delete_batch(pk_list, self.using)
+   309                  deleted_counter[model._meta.label] += count
+        
+   310                  if not model._meta.auto_created:
+   311                      for obj in instances:
+   312                          signals.post_delete.send(
+   313                              sender=model, instance=obj, using=self.using
+   314                          )
+        
+   315          # update collected instances
+   316          for instances_for_fieldvalues in self.field_updates.values():
+   317              for (field, value), instances in instances_for_fieldvalues.items():
+   318                  for obj in instances:
+   319                      setattr(obj, field.attname, value)
+   320          for model, instances in self.data.items():
+   321              for instance in instances:
+   322                  setattr(instance, model._meta.pk.attname, None)
+   323          return sum(deleted_counter.values()), dict(deleted_counter)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I will detect the file's indentation to ensure any edits preserve the exact spacing before making changes.
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+django/db/models/deletion.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll update the fast-delete path to clear the instance primary key after the delete so models with no dependencies have their PK set to None. I'll make a small, targeted replace in django/db/models/deletion.py and preserve indentation.
+
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/models/deletion.py
+----ARG----
+from_line
+271
+----ARG----
+to_line
+277
+----ARG----
+content
+    # Optimize for the case with a single obj and no dependencies
+    if len(self.data) == 1 and len(instances) == 1:
+        instance = list(instances)[0]
+        if self.can_fast_delete(instance):
+            with transaction.mark_for_rollback_on_error():
+                count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
+            # Clear the primary key on the instance to reflect that it has been deleted
+            setattr(instance, model._meta.pk.attname, None)
+            return count, {model._meta.label: count}
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+✓ Successfully replaced lines 271-277 in django/db/models/deletion.py. Replaced 7 lines with 9 lines (net change: +2 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 330 total lines.
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I'll re-open the edited section to verify the replacement, indentation, and surrounding context immediately after the edit.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/models/deletion.py
+----ARG----
+start_line
+260
+----ARG----
+end_line
+290
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+   260          self.data = {model: self.data[model] for model in sorted_models}
+        
+   261      def delete(self):
+   262          # sort instance collections
+   263          for model, instances in self.data.items():
+   264              self.data[model] = sorted(instances, key=attrgetter("pk"))
+        
+   265          # if possible, bring the models in an order suitable for databases that
+   266          # don't support transactions or cannot defer constraint checks until the
+   267          # end of a transaction.
+   268          self.sort()
+   269      # Optimize for the case with a single obj and no dependencies
+   270      if len(self.data) == 1 and len(instances) == 1:
+   271          instance = list(instances)[0]
+   272          if self.can_fast_delete(instance):
+   273              with transaction.mark_for_rollback_on_error():
+   274                  count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
+   275              # Clear the primary key on the instance to reflect that it has been deleted
+   276              setattr(instance, model._meta.pk.attname, None)
+   277              return count, {model._meta.label: count}
+   278                  with transaction.mark_for_rollback_on_error():
+   279                      count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
+   280                  return count, {model._meta.label: count}
+        
+   281          with transaction.atomic(using=self.using, savepoint=False):
+   282              # send pre_delete signals
+   283              for model, obj in self.instances_with_model():
+   284                  if not model._meta.auto_created:
+   285                      signals.pre_delete.send(
+   286                          sender=model, instance=obj, using=self.using
+   287                      )
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I'll run git_diff to review the changes made to deletion.py before performing final checks and finishing.
+----BEGIN_FUNCTION_CALL----
+git_diff
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+diff --git a/django/db/models/deletion.py b/django/db/models/deletion.py
+index 92fe4affb9..83f98e9e4c 100644
+--- a/django/db/models/deletion.py
++++ b/django/db/models/deletion.py
+@@ -268,13 +268,15 @@ class Collector:
+         # don't support transactions or cannot defer constraint checks until the
+         # end of a transaction.
+         self.sort()
+-        # number of objects deleted for each model label
+-        deleted_counter = Counter()
+-
+-        # Optimize for the case with a single obj and no dependencies
+-        if len(self.data) == 1 and len(instances) == 1:
+-            instance = list(instances)[0]
+-            if self.can_fast_delete(instance):
++    # Optimize for the case with a single obj and no dependencies
++    if len(self.data) == 1 and len(instances) == 1:
++        instance = list(instances)[0]
++        if self.can_fast_delete(instance):
++            with transaction.mark_for_rollback_on_error():
++                count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
++            # Clear the primary key on the instance to reflect that it has been deleted
++            setattr(instance, model._meta.pk.attname, None)
++            return count, {model._meta.label: count}
+                 with transaction.mark_for_rollback_on_error():
+                     count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
+                 return count, {model._meta.label: count}
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+I'll run the repository syntax check to ensure the recent Python edit didn't introduce any syntax or indentation errors before finalizing the change.
+----BEGIN_FUNCTION_CALL----
+check_repo_syntax
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+✓ All checked Python files have valid syntax
+
