@@ -750,35 +750,38 @@ class SWEEnvironment:
         """
         try:
             # Try to compile the file to check syntax
-            # Note: execute() raises an exception on non-zero exit codes
+            # Note: execute() returns {"output": ..., "returncode": ...} and does NOT raise on non-zero exit
             result = self.env.execute(f"python3 -m py_compile {file_path} 2>&1")
-            # If we get here, the command succeeded (no syntax errors)
-            return f"✓ {file_path} has valid Python syntax"
+            output = result['output']
+            returncode = result.get('returncode', 0)
+            
+            if returncode == 0:
+                # Command succeeded - no syntax errors
+                return f"✓ {file_path} has valid Python syntax"
+            else:
+                # Non-zero exit code means syntax error
+                return f"✗ Syntax error in {file_path}:\n{output.strip()}"
+                
         except Exception as e:
             import traceback
             traceback.print_exc()
-            # The exception likely contains the syntax error details
-            error_msg = str(e)
-            
-            # Check if this is a syntax error (SyntaxError, IndentationError, etc.)
-            if any(keyword in error_msg for keyword in ['SyntaxError', 'IndentationError', 'TabError', 'unexpected indent']):
-                return f"✗ Syntax error in {file_path}:\n{error_msg}"
+            # If an exception occurred (timeout, etc.), try alternative check
             
             # Try alternative check with ast.parse as fallback
             try:
                 result = self.env.execute(f"python3 -c 'import ast; ast.parse(open(\"{file_path}\").read())' 2>&1")
-                # Success - no syntax errors
-                return f"✓ {file_path} has valid Python syntax"
+                output = result['output']
+                returncode = result.get('returncode', 0)
+                
+                if returncode == 0:
+                    return f"✓ {file_path} has valid Python syntax"
+                else:
+                    return f"✗ Syntax error in {file_path}:\n{output.strip()}"
             except Exception as e2:
                 import traceback
                 traceback.print_exc()
-                # Check if this exception contains syntax error info
-                error_msg2 = str(e2)
-                if any(keyword in error_msg2 for keyword in ['SyntaxError', 'IndentationError', 'TabError', 'unexpected indent']):
-                    return f"✗ Syntax error in {file_path}:\n{error_msg2}"
-                
-                # Neither method worked - return original error
-                return f"✗ Syntax error in {file_path}:\n{error_msg}"
+                # Both methods failed - return error
+                return f"✗ Error checking syntax for {file_path}: {str(e2)}"
 
     def list_modified_python_files(self) -> str:
         """
