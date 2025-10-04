@@ -43,7 +43,7 @@ class OpenAIModel(LLM):
     def generate(self, prompt: str) -> str:
         if self.openai_model:
             response = self.client.responses.create(model=self.model_name, tools=[{"type": "web_search_preview"}], input=prompt)
-            
+
             # Get the text content and ensure stop token is present
             text = response.output_text
         else:

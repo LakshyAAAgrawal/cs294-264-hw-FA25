@@ -11,9 +11,7 @@ class ResponseParser:
     ARG_SEP = "----ARG----"
 
     # Students should include this exact template in the system prompt so the LLM follows it.
-    response_format = f"""
-your_thoughts_here
-...
+    response_format = f"""<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
 {BEGIN_CALL}
 function_name
 {ARG_SEP}
