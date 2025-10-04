@@ -129,10 +129,10 @@ class SWEEnvironment:
         try:
             if start_line is not None and end_line is not None:
                 # Show specific line range
-                cmd = f"sed -n '{start_line},{end_line}p' {file_path} | cat -n"
+                cmd = f"sed -n '{start_line},{end_line}p' {file_path} | nl -v {start_line} -w 6 -s '  '"
             elif start_line is not None:
                 # Show from start_line to end
-                cmd = f"sed -n '{start_line},$p' {file_path} | cat -n"
+                cmd = f"sed -n '{start_line},$p' {file_path} | nl -v {start_line} -w 6 -s '  '"
             else:
                 # Show entire file
                 cmd = f"cat -n {file_path}"
@@ -354,16 +354,49 @@ class SWEEnvironment:
     def git_diff(self) -> str:
         """
         Show current git diff to see what changes have been made so far.
-        Useful to verify your edits and see if you're on the right track.
+        CRITICAL: Call this before finish() to verify you made actual code changes.
+        If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
         
         Returns:
             Git diff output showing all current changes
         """
         try:
             result = self.env.execute("git diff")
-            return result['output'] if result['output'].strip() else "No changes yet."
+            diff_output = result['output'].strip() if result['output'] else ""
+            if not diff_output:
+                return "No changes yet. You have not modified any files. Make code changes before calling finish()!"
+            return diff_output
         except Exception as e:
             return f"Error getting git diff: {str(e)}"
+    
+    def check_syntax(self, file_path: str) -> str:
+        """
+        Check if a Python file has valid syntax after editing.
+        Useful to quickly verify you didn't introduce syntax errors.
+        
+        Args:
+            file_path (str): path to the Python file to check
+            
+        Returns:
+            Success message or syntax error details
+        """
+        try:
+            # Try to compile the file to check syntax
+            result = self.env.execute(f"python3 -m py_compile {file_path}")
+            if result['exit_code'] == 0:
+                return f"✓ {file_path} has valid Python syntax"
+            else:
+                return f"✗ Syntax error in {file_path}:\n{result['output']}"
+        except Exception as e:
+            # If py_compile fails, try basic import check
+            try:
+                result = self.env.execute(f"python3 -c 'import ast; ast.parse(open(\"{file_path}\").read())'")
+                if result['exit_code'] == 0:
+                    return f"✓ {file_path} has valid Python syntax"
+                else:
+                    return f"✗ Syntax error in {file_path}:\n{result['output']}"
+            except Exception as e2:
+                return f"Could not check syntax: {str(e)}"
 
 class DumbEnvironment:
     """

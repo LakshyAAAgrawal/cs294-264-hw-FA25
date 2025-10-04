@@ -46,7 +46,7 @@ def process_instance(
         # Initialize the environment
         env = SWEEnvironment(instance)
         # Initialize the agent
-        agent = ReactAgent("swe-agent", parser, llm)
+        agent = ReactAgent("swe-agent", parser, llm, instance_id=instance_id, output_dir=output_dir)
         
         # Add environment functions to the agent
         agent.add_functions([
