@@ -752,7 +752,9 @@ class SWEEnvironment:
             Git diff output showing all current changes
         """
         try:
-            result = self.env.execute("git diff")
+            # Use 'git diff HEAD' to show all changes from the original commit,
+            # regardless of staging status (avoids issues when generate_patch stages files)
+            result = self.env.execute("git diff HEAD")
             diff_output = result['output'].strip() if result['output'] else ""
             if not diff_output:
                 return "No changes yet. You have not modified any files. Make code changes before calling finish()!"
@@ -886,7 +888,7 @@ class SWEEnvironment:
         List modified (unstaged) Python files according to git.
         """
         try:
-            out = self.env.execute("git diff --name-only -- '*.py'")
+            out = self.env.execute("git diff HEAD --name-only -- '*.py'")
             return out['output'] or ""
         except Exception as e:
             import traceback
@@ -898,7 +900,7 @@ class SWEEnvironment:
         Check syntax for all modified Python files in the repository.
         """
         try:
-            files_out = self.env.execute("git diff --name-only -- '*.py'")
+            files_out = self.env.execute("git diff HEAD --name-only -- '*.py'")
             files = [f.strip() for f in files_out['output'].split('\n') if f.strip()]
             # if not files:
             #     files_out = self.env.execute("git ls-files -- '*.py'")
@@ -1016,7 +1018,7 @@ class SWEEnvironment:
                 if apply_result.get('exit_code', 0) == 0:
                     # After applying a patch, check syntax of modified Python files
                     try:
-                        files_out = self.env.execute("git diff --name-only -- '*.py'")
+                        files_out = self.env.execute("git diff HEAD --name-only -- '*.py'")
                         files = [f.strip() for f in files_out.get('output', '').split('\n') if f.strip()]
                     except Exception:
                         files = []
@@ -1112,7 +1114,7 @@ class SWEEnvironment:
             
             # 2. File type check - warn if only test files modified
             try:
-                files_output = self.env.execute("git diff --name-only")
+                files_output = self.env.execute("git diff HEAD --name-only")
                 modified_files = [f.strip() for f in files_output.get('output', '').split('\n') if f.strip()]
                 
                 test_file_indicators = ['test_', '_test', '/test/', '/tests/', 'pytest', 'conftest']
@@ -1150,7 +1152,7 @@ class SWEEnvironment:
             
             # 4. Semantic analysis - check for undefined variables, unused imports, etc.
             try:
-                files_output = self.env.execute("git diff --name-only -- '*.py'")
+                files_output = self.env.execute("git diff HEAD --name-only -- '*.py'")
                 py_files = [f.strip() for f in files_output.get('output', '').split('\n') if f.strip()]
                 
                 semantic_issues = []
