@@ -81,9 +81,9 @@ arg2_value (can be multiline)
             # Add the correct response format to the error message
             # Extract the original error message
             original_error = str(e)
-            error_msg = f"Error parsing response: {original_error}\n\n"
+            error_msg = f"Error parsing response: {original_error}. You must ensure that you make a function call at the end of your response.\n\n"
             error_msg += "Your response must strictly follow this format:\n```\n"
-            error_msg += self.response_format
+            error_msg += self.response_format.strip()
             error_msg += "\n```"
 
             raise ValueError(error_msg)
