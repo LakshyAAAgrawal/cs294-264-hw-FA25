@@ -106,6 +106,7 @@ Before calling replace_in_file or find_and_replace_text, verify:
    - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
 2. ✓ Have I READ the exact lines I'm about to replace?
 3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
 4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
 5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
 
@@ -149,13 +150,16 @@ EDIT VERIFICATION WORKFLOW (MANDATORY)
 After EVERY replace_in_file or find_and_replace_text call:
 
 1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
 2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
-3. [Visual check: indentation correct?]
-4. [If Python] check_repo_syntax()
-5. [If syntax error] → Fix immediately, go back to step 1
-6. [If correct] → Proceed to next edit or finish
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
 
-NEVER skip step 2-5. Line numbers change after edits, so you MUST re-read.
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
 
 Efficiency tips:
 - Aim for 5–15 steps for most tasks

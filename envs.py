@@ -157,11 +157,16 @@ class SWEEnvironment:
                 lines_added = len(content_lines)
                 net_change = lines_added - lines_removed
                 
+                # Generate visual diff (before/after comparison)
+                old_lines = lines[from_line-1:to_line]
+                visual_diff = self._generate_visual_diff(old_lines, content_lines, from_line)
+                
                 msg = (
                     f"✓ Successfully replaced lines {from_line}-{to_line} in {file_path}. "
                     f"Replaced {lines_removed} lines with {lines_added} lines (net change: {net_change:+d} lines).\n"
                     f"⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.\n"
-                    f"The new file has approximately {len(lines) + net_change} total lines."
+                    f"The new file has approximately {len(lines) + net_change} total lines.\n\n"
+                    f"{visual_diff}"
                 )
                 return self._append_syntax_warning_if_needed(file_path, msg)
             
@@ -177,7 +182,8 @@ class SWEEnvironment:
             traceback.print_exc()
             return f"Error in replace_in_file: {str(e)}"
     
-    def show_file(self, file_path: str, start_line: "int | None" = None, end_line: "int | None" = None) -> str:
+    def show_file(self, file_path: str, start_line: "int | None" = None, end_line: "int | None" = None, 
+                  highlight_whitespace: bool = False) -> str:
         """
         Show the content of the file with line numbers.
         
@@ -185,6 +191,7 @@ class SWEEnvironment:
             file_path (str): path to the file to show
             start_line (int, optional): starting line number (1-indexed)
             end_line (int, optional): ending line number (1-indexed)
+            highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
         
         Returns:
             The content of the file with line numbers
@@ -201,12 +208,42 @@ class SWEEnvironment:
                 cmd = f"cat -n {file_path}"
             
             output = self.env.execute(cmd)
-            return output['output']
+            result = output['output']
+            
+            # If whitespace highlighting requested, visualize spaces and tabs
+            if highlight_whitespace:
+                result = self._highlight_whitespace(result)
+                result = "WHITESPACE HIGHLIGHTED (· = space, → = tab):\n" + result
+            
+            return result
             
         except Exception as e:
             import traceback
             traceback.print_exc()
             return f"Error reading file: {str(e)}"
+    
+    def _highlight_whitespace(self, text: str) -> str:
+        """
+        Visualize whitespace characters in text.
+        Replaces spaces with · and tabs with →
+        """
+        try:
+            lines = text.split('\n')
+            result_lines = []
+            for line in lines:
+                # Only highlight leading whitespace to avoid cluttering
+                stripped = line.lstrip()
+                if stripped:
+                    leading_ws = line[:len(line) - len(stripped)]
+                    # Replace tabs and spaces in leading whitespace
+                    highlighted_ws = leading_ws.replace('\t', '→').replace(' ', '·')
+                    result_lines.append(highlighted_ws + stripped)
+                else:
+                    # Empty line or only whitespace
+                    result_lines.append(line.replace('\t', '→').replace(' ', '·'))
+            return '\n'.join(result_lines)
+        except Exception:
+            return text  # Return original if highlighting fails
     
     def search_in_file(self, file_path: str, pattern: str, use_regex: bool = True) -> str:
         """
@@ -1046,6 +1083,58 @@ class SWEEnvironment:
             import traceback
             traceback.print_exc()
             return f"Error during verification: {str(e)}"
+
+    def _generate_visual_diff(self, old_lines: list, new_lines: list, start_line: int) -> str:
+        """
+        Generate a visual side-by-side diff showing before/after changes.
+        Helps catch indentation and content errors immediately.
+        """
+        try:
+            max_lines = max(len(old_lines), len(new_lines))
+            if max_lines == 0:
+                return "VISUAL DIFF: (no changes)"
+            
+            # Limit diff display to avoid overwhelming output
+            display_limit = 15
+            truncated = max_lines > display_limit
+            display_lines = min(max_lines, display_limit)
+            
+            diff_parts = ["VISUAL DIFF (before → after):"]
+            diff_parts.append("─" * 70)
+            
+            for i in range(display_lines):
+                line_num = start_line + i
+                old_line = old_lines[i] if i < len(old_lines) else ""
+                new_line = new_lines[i] if i < len(new_lines) else ""
+                
+                # Check for indentation difference
+                old_indent = len(old_line) - len(old_line.lstrip()) if old_line else 0
+                new_indent = len(new_line) - len(new_line.lstrip()) if new_line else 0
+                indent_marker = "⚠️INDENT" if old_indent != new_indent else ""
+                
+                # Truncate long lines for display
+                max_width = 60
+                old_display = (old_line[:max_width] + "…") if len(old_line) > max_width else old_line
+                new_display = (new_line[:max_width] + "…") if len(new_line) > max_width else new_line
+                
+                if i < len(old_lines) and i < len(new_lines):
+                    if old_line != new_line:
+                        diff_parts.append(f"  {line_num:4d} - │ {old_display}")
+                        diff_parts.append(f"  {line_num:4d} + │ {new_display} {indent_marker}")
+                    else:
+                        diff_parts.append(f"  {line_num:4d}   │ {old_display}")
+                elif i < len(old_lines):
+                    diff_parts.append(f"  {line_num:4d} - │ {old_display} (REMOVED)")
+                else:
+                    diff_parts.append(f"  {line_num:4d} + │ {new_display} (ADDED) {indent_marker}")
+            
+            if truncated:
+                diff_parts.append(f"  ... ({max_lines - display_limit} more lines not shown)")
+            
+            diff_parts.append("─" * 70)
+            return "\n".join(diff_parts)
+        except Exception as e:
+            return f"VISUAL DIFF: (error generating diff: {e})"
 
     def _append_syntax_warning_if_needed(self, file_path: str, base_message: str) -> str:
         """
