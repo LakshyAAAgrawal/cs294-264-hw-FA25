@@ -98,13 +98,6 @@ class SWEEnvironment:
             if to_line > len(lines):
                 return f"Error: to_line ({to_line}) exceeds file length ({len(lines)})"
             
-            # Warn about large replacements (high risk of errors)
-            lines_to_replace = to_line - from_line + 1
-            if lines_to_replace > 30:
-                return f"⚠️  WARNING: Attempting to replace {lines_to_replace} lines at once. This has a high risk of indentation errors.\n" \
-                       f"RECOMMENDATION: Break this into smaller edits (max 20 lines each). Read the file, make a small edit, re-read, repeat.\n" \
-                       f"If you must proceed, ensure indentation is EXACTLY correct by carefully examining the surrounding code."
-            
             # Replace lines (convert to 0-indexed)
             # Split content into lines to maintain structure
             content_lines = content.split('\n')
@@ -678,14 +671,26 @@ class SWEEnvironment:
     
     def find_and_replace_text(self, file_path: str, old_text: str, new_text: str, count: int = 1) -> str:
         """
-        Find and replace exact text in a file (simpler and safer than line-number-based replacement).
-        This tool is useful for small, precise changes where you know the exact text to replace.
+        Find and replace exact text in a file without using line numbers.
+        Useful for small, precise changes where you know the exact text to replace.
         
-        Advantages over replace_in_file:
-        - No line numbers needed (no stale line number issues)
+        Advantages:
+        - No line numbers needed (avoids stale line number issues)
         - Automatically preserves surrounding code
-        - Safer for small, targeted changes
+        - Good for small, targeted changes
         - Less prone to indentation errors
+        
+        When to use this tool:
+        - Changing a single function call or variable name
+        - Modifying a small code block (< 10 lines)
+        - Making precise changes where you know exact text
+        - Text to replace is unique in the file
+        
+        When to use replace_in_file instead:
+        - Large sections (>20 lines) need rewriting
+        - Text is not unique enough in file
+        - Adding completely new code blocks
+        - Multiple scattered edits across the file
         
         Args:
             file_path (str): path to the file to edit
@@ -797,14 +802,14 @@ class SWEEnvironment:
 
     def check_repo_syntax(self) -> str:
         """
-        Check syntax for all modified Python files (according to git). If none modified, checks all tracked Python files.
+        Check syntax for all modified Python files in the repository.
         """
         try:
             files_out = self.env.execute("git diff --name-only -- '*.py'")
             files = [f.strip() for f in files_out['output'].split('\n') if f.strip()]
-            if not files:
-                files_out = self.env.execute("git ls-files -- '*.py'")
-                files = [f.strip() for f in files_out['output'].split('\n') if f.strip()]
+            # if not files:
+            #     files_out = self.env.execute("git ls-files -- '*.py'")
+            #     files = [f.strip() for f in files_out['output'].split('\n') if f.strip()]
             if not files:
                 return "No Python files to check."
             errors = []
@@ -905,6 +910,116 @@ class SWEEnvironment:
             import traceback
             traceback.print_exc()
             return f"Error in git_apply: {str(e)}"
+
+    def count_lines(self, file_path: str) -> str:
+        """
+        Return the total line count of a file.
+        Useful to know the size before doing show_file() or to understand file structure.
+        
+        Args:
+            file_path (str): path to the file
+            
+        Returns:
+            Line count information or error message
+        """
+        try:
+            result = self.env.execute(f"wc -l {file_path}")
+            return result['output'].strip()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"Error counting lines: {str(e)}"
+    
+    def verify_before_finish(self) -> str:
+        """
+        Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+        
+        This function automatically:
+        1. Shows git diff of all changes
+        2. Checks Python syntax on modified files
+        3. Verifies that actual code changes were made
+        4. Returns a summary report with pass/fail status
+        
+        **IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+        
+        Returns:
+            Verification report with ✅ if passed or ❌ with specific issues to fix
+        """
+        try:
+            report = []
+            all_checks_passed = True
+            
+            # 1. Git diff check - verify changes were made
+            report.append("=" * 60)
+            report.append("PRE-FINISH VERIFICATION CHECKLIST")
+            report.append("=" * 60)
+            report.append("")
+            
+            diff = self.git_diff()
+            if not diff or diff.strip() == "" or "No changes yet" in diff:
+                report.append("❌ CHECK 1 FAILED: No code changes detected")
+                report.append("   You have not modified any files.")
+                report.append("   DO NOT call finish() - make code changes first!")
+                return "\n".join(report)
+
+            # Count lines changed
+            diff_lines = diff.split('\n')
+            additions = len([l for l in diff_lines if l.startswith('+') and not l.startswith('+++')])
+            deletions = len([l for l in diff_lines if l.startswith('-') and not l.startswith('---')])
+
+            report.append(f"✅ CHECK 1 PASSED: Code changes detected")
+            report.append(f"   Lines added: {additions}")
+            report.append(f"   Lines deleted: {deletions}")
+            report.append("")
+            
+            # 2. Syntax check - verify no syntax errors (excluding test error files)
+            syntax_result = self.check_repo_syntax()
+            
+            if "✗" in syntax_result or "Syntax errors detected" in syntax_result:
+                report.append("❌ CHECK 2 FAILED: Syntax errors detected")
+                report.append(f"   {syntax_result}")
+                report.append("")
+                report.append("   FIX THESE ERRORS before calling finish()!")
+                all_checks_passed = False
+            else:
+                report.append(f"✅ CHECK 2 PASSED: {syntax_result}")
+                report.append("")
+            
+            # 3. Show diff preview
+            report.append("=" * 60)
+            report.append("GIT DIFF PREVIEW (first 1000 chars):")
+            report.append("=" * 60)
+            diff_preview = diff[:1000]
+            if len(diff) > 1000:
+                diff_preview += "\n... (truncated, use git_diff() to see full diff)"
+            report.append(diff_preview)
+            report.append("")
+            
+            # 4. Final verdict
+            report.append("=" * 60)
+            if all_checks_passed:
+                report.append("✅ ALL CHECKS PASSED - Safe to call finish()")
+                report.append("=" * 60)
+                report.append("")
+                report.append("Final reminders before calling finish():")
+                report.append("  • Review the diff above - does it match the task?")
+                report.append("  • Are you modifying the RIGHT files (not test files)?")
+                report.append("  • Is indentation correct (no misaligned code)?")
+                report.append("  • Did you preserve imports and critical code?")
+                report.append("")
+                report.append("If all looks good, call: finish('your summary here')")
+            else:
+                report.append("❌ VERIFICATION FAILED - DO NOT call finish() yet")
+                report.append("=" * 60)
+                report.append("")
+                report.append("Fix the issues above, then run verify_before_finish() again.")
+            
+            return "\n".join(report)
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"Error during verification: {str(e)}"
 
     def _append_syntax_warning_if_needed(self, file_path: str, base_message: str) -> str:
         """

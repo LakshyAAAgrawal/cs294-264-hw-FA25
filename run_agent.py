@@ -94,7 +94,9 @@ def process_instance(
             env.run_python_snippet,
             env.detect_indentation,
             env.list_modified_python_files,
-            env.find_and_replace_text
+            env.find_and_replace_text,
+            env.count_lines,                # ← Check file size before reading
+            env.verify_before_finish        # ← Comprehensive pre-finish checks
         ])
 
         # Run the agent

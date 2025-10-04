@@ -62,17 +62,18 @@ Recommended workflow:
    - Use search_in_file for precise in-file queries
 2) Read
    - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
    - Confirm indentation style (tabs vs spaces) and surrounding context
 3) Edit
-   - For small, precise text changes: Use find_and_replace_text (safer, no line numbers)
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
    - For line-based edits: Use replace_in_file (requires exact line numbers)
    - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
    - Repeat for additional edits (always re-read after each edit)
 4) Test/Verify
-   - Run tests or quick checks (e.g., run_bash_cmd, check_syntax for Python) as appropriate
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
 5) Finish
-   - Call git_diff to confirm actual changes
-   - If the diff is correct, finish() with a brief summary of the fix
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
 
 Key rules for safe editing:
 - Always read the file before editing to understand current structure
@@ -81,13 +82,29 @@ Key rules for safe editing:
   - This re-reading step is MANDATORY, not optional
   - Verify the edit was applied correctly before proceeding
 
-INDENTATION RULES (CRITICAL FOR SUCCESS):
-- BEFORE editing: Call detect_indentation(file_path) to see if file uses tabs or spaces
-- Read the exact lines you'll replace - note the indentation level precisely
-- Match indentation EXACTLY - count spaces/tabs character-by-character
-- For Python files: After EVERY edit, call check_syntax(file_path) to catch indentation errors
-- If syntax check fails, immediately fix and re-check before proceeding
-- Common mistake: Copying indentation from system prompt examples instead of from the actual file
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
 
 EDIT SIZE AND SAFETY:
 - Maximum recommended edit: 20 lines per replace_in_file call
@@ -98,6 +115,18 @@ EDIT SIZE AND SAFETY:
 - from_line and to_line must be integers
 - Make minimal changes; avoid unnecessary refactors
 - Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+3. [Visual check: indentation correct?]
+4. [If Python] check_repo_syntax()
+5. [If syntax error] → Fix immediately, go back to step 1
+6. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2-5. Line numbers change after edits, so you MUST re-read.
 
 Efficiency tips:
 - Aim for 5–15 steps for most tasks
@@ -115,9 +144,25 @@ Common pitfalls to avoid (LEARN FROM THESE):
 - Deleting imports or critical code unintentionally
 - Creating duplicate functions/methods
 - Finishing without making actual changes
-- Finishing without calling git_diff to verify changes
+- Finishing without calling verify_before_finish
 - Asking the user for input or choices
-- Not calling check_syntax after editing Python files
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
 
 Search strategies:
 - Start broad with search_in_directory; narrow with search_in_file
@@ -126,21 +171,26 @@ Search strategies:
 
 Bash best practices:
 - Use run_bash_cmd to run tests or for larger scripted edits
-- Prefer replace_in_file for small, precise changes
+- Use find_and_replace_text or replace_in_file depending on the edit type
 - For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
 
-How to finish (MANDATORY CHECKLIST):
-Before calling finish(), complete ALL of these steps:
-1. Run git_diff() and carefully review the changes
-2. For Python files: Run check_repo_syntax() to verify no syntax/indentation errors
-3. Verify the diff matches the task requirements:
-   - Check for correct indentation (no misaligned code)
-   - Check for NO deleted imports or critical code
-   - Check for NO duplicate functions or methods
-   - Check that only relevant code was modified
-4. If issues found in diff: Fix them immediately, don't call finish()
-5. Only call finish() when the diff is clean and correct
-6. Do not finish if no changes were made or if changes are incorrect
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
 
 Correct format examples:
 
@@ -157,7 +207,7 @@ directory
 ----END_FUNCTION_CALL----
 
 Example 2 (read a range):
-I’ll inspect the function to see current logic and indentation.
+I'll inspect the function to see current logic and indentation.
 ----BEGIN_FUNCTION_CALL----
 show_file
 ----ARG----
@@ -171,8 +221,25 @@ end_line
 80
 ----END_FUNCTION_CALL----
 
-Example workflow (concise):
-1) search_in_directory → 2) show_file → 3) replace_in_file → 4) show_file (re-read) → 5) tests via run_bash_cmd → 6) git_diff → 7) finish
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
 
 Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step."""
 
@@ -315,6 +382,11 @@ class ReactAgent:
 
         Returns a short success string.
         """
+        try:
+            at_message_id = int(at_message_id)
+        except:
+            raise ValueError(f"Invalid at_message_id: {at_message_id}. It must be an integer.")
+
         # Update instruction node content
         self.set_message_content(self.instructions_message_id, instructions)
 
@@ -544,16 +616,34 @@ Take a different approach now. Make a simple, safe action."""
                         # Execute the tool
                         result = func(**filtered_args)
                         
-                        # If finish was called, return the result
+                        # If finish was called, run verification first
                         if function_name == "finish":
+                            # Step 1: Run verify_before_finish to do comprehensive checks
+                            verify_func = self.function_map.get("verify_before_finish")
+                            if verify_func:
+                                try:
+                                    verification_result = verify_func()
+                                    
+                                    # Only add message if verification failed
+                                    if "❌" in verification_result or "VERIFICATION FAILED" in verification_result:
+                                        self.add_message("tool", f"Pre-finish verification failed:\n{verification_result}")
+                                        continue
+                                    # If verification passed, don't add any message - just proceed
+                                except Exception as e:
+                                    import traceback
+                                    traceback.print_exc()
+                                    self.add_message("tool", f"Error during verification: {str(e)}")
+                                    continue
+
+                            # Step 2: Generate patch
                             oo = self.function_map["generate_patch"](result)
                             if "diff --git" not in oo:
-                                # The agent has not actually mande any code changes. Add error message
+                                # The agent has not actually made any code changes. Add error message
                                 error_msg = "Error: finish() must be called only after making code changes. You must use the file edit tools to make changes to the codebase to resolve the issue. After making changes, you must call finish() to indicate that the task has been completed."
                                 self.add_message("tool", error_msg)
                                 continue
 
-                            # Additional guard: ensure repository has no Python syntax errors before finishing
+                            # Step 3: Final syntax check (backup, since verify_before_finish already does this)
                             repo_syntax_checker = self.function_map["check_repo_syntax"]
                             try:
                                 syntax_report = repo_syntax_checker()
