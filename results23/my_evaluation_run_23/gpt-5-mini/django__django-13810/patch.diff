@@ -1,0 +1,60 @@
+diff --git a/django/core/handlers/base.py b/django/core/handlers/base.py
+index 8e8c3da06a..1ec2e714da 100644
+--- a/django/core/handlers/base.py
++++ b/django/core/handlers/base.py
+@@ -29,18 +29,18 @@ class BaseHandler:
+ 
+         Must be called after the environment is fixed (see __call__ in subclasses).
+         """
+-        self._view_middleware = []
+-        self._template_response_middleware = []
+-        self._exception_middleware = []
+-
+-        get_response = self._get_response_async if is_async else self._get_response
+-        handler = convert_exception_to_response(get_response)
+-        handler_is_async = is_async
+-        for middleware_path in reversed(settings.MIDDLEWARE):
+-            middleware = import_string(middleware_path)
+-            middleware_can_sync = getattr(middleware, 'sync_capable', True)
+-            middleware_can_async = getattr(middleware, 'async_capable', False)
+-            if not middleware_can_sync and not middleware_can_async:
++middleware_can_sync = getattr(middleware, 'sync_capable', True)
++                middleware_can_async = getattr(middleware, 'async_capable', False)
++                if not middleware_can_sync and not middleware_can_async:
++                    raise RuntimeError(
++                        'Middleware %s must have at least one of '
++                        'sync_capable/async_capable set to True.' % middleware_path
++                    )
++                elif not handler_is_async and middleware_can_sync:
++                    middleware_is_async = False
++                else:
++                    middleware_is_async = middleware_can_async
++if not middleware_can_sync and not middleware_can_async:
+                 raise RuntimeError(
+                     'Middleware %s must have at least one of '
+                     'sync_capable/async_capable set to True.' % middleware_path
+@@ -50,11 +50,22 @@ class BaseHandler:
+             else:
+                 middleware_is_async = middleware_can_async
+             try:
+-                # Adapt handler, if needed.
+-                handler = self.adapt_method_mode(
++                # Adapt handler, if needed, but don't overwrite the current handler
++                # until we know the middleware will be used. Use a candidate_handler
++                # for instantiation to avoid "poisoning" the chain when
++                # MiddlewareNotUsed is raised.
++                candidate_handler = self.adapt_method_mode(
+                     middleware_is_async, handler, handler_is_async,
+                     debug=settings.DEBUG, name='middleware %s' % middleware_path,
+                 )
++                mw_instance = middleware(candidate_handler)
++            except MiddlewareNotUsed as exc:
++                if settings.DEBUG:
++                    if str(exc):
++                        logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
++                    else:
++                        logger.debug('MiddlewareNotUsed: %r', middleware_path)
++                continue
+                 mw_instance = middleware(handler)
+             except MiddlewareNotUsed as exc:
+                 if settings.DEBUG:
