@@ -2451,3 +2451,685 @@ True
 |MESSAGE(role="tool", id=46)|
 Error: unsupported operand type(s) for -: 'str' and 'int'
 
+----------------------------
+|MESSAGE(role="assistant", id=47)|
+Thanks — I inspected sphinx/domains/cpp.py and the simplest, safe fix is to (1) add a small AST node for user-defined-literals and (2) extend _parse_literal so numeric/string/char literals look for an identifier-style suffix immediately following the literal and return an ASTUserDefinedLiteral when present.
+
+Summary (1–2 lines)
+- Add ASTUserDefinedLiteral (stores the base literal AST node + suffix).
+- In _parse_literal: after constructing the base literal node for numbers, strings, and chars, check for identifier_re immediately after the literal; if present, return ASTUserDefinedLiteral(base_node, suffix) and otherwise restore position and return the base node.
+
+Patch to apply
+1) Insert this AST class immediately after ASTCharLiteral.describe_signature (i.e., before ASTThisLiteral). Ensure indentation matches surrounding file (two spaces at top-level in this file):
+
+```python
+class ASTUserDefinedLiteral(ASTLiteral):
+    """Represents a literal with a user-defined-literal suffix, e.g. 123_km or "s"_mysuf."""
+    def __init__(self, literal: ASTLiteral, suffix: str) -> None:
+        self.literal = literal
+        self.suffix = suffix
+
+    def _stringify(self, transform: StringifyTransform) -> str:
+        return transform(self.literal) + self.suffix
+
+    def get_id(self, version: int) -> str:
+        try:
+            base = self.literal.get_id(version)
+        except Exception:
+            base = str(self.literal)
+        return "%s_udl_%s" % (base, self.suffix)
+
+    def describe_signature(self, signode: TextElement, mode: str,
+                           env: "BuildEnvironment", symbol: "Symbol") -> None:
+        txt = str(self)
+        signode.append(nodes.Text(txt, txt))
+```
+
+2) Replace the three literal-returning blocks in _parse_literal with these variants:
+
+a) Number-literal block — replace the existing loop body for numeric regexes with:
+
+```python
+for regex in [float_literal_re, binary_literal_re, hex_literal_re,
+              integer_literal_re, octal_literal_re]:
+    pos = self.pos
+    if self.match(regex):
+        # consume integer/float suffix characters (u, l, f, etc.)
+        while self.current_char in 'uUlLfF':
+            self.pos += 1
+        num_node = ASTNumberLiteral(self.definition[pos:self.pos])
+        # user-defined literal suffix? (identifier-style suffix immediately following)
+        pos_after_num = self.pos
+        if self.match(identifier_re):
+            return ASTUserDefinedLiteral(num_node, self.matched_text)
+        # restore if not a UDL and return number node
+        self.pos = pos_after_num
+        return num_node
+```
+
+b) String-literal block — replace the existing:
+
+```python
+string = self._parse_string()
+if string is not None:
+    return ASTStringLiteral(string)
+```
+
+with:
+
+```python
+string = self._parse_string()
+if string is not None:
+    str_node = ASTStringLiteral(string)
+    pos_after_str = self.pos
+    if self.match(identifier_re):
+        return ASTUserDefinedLiteral(str_node, self.matched_text)
+    self.pos = pos_after_str
+    return str_node
+```
+
+c) Char-literal block — replace the existing char handling:
+
+```python
+if self.match(char_literal_re):
+    prefix = self.last_match.group(1)  # may be None when no prefix
+    data = self.last_match.group(2)
+    try:
+        return ASTCharLiteral(prefix, data)
+    except UnicodeDecodeError as e:
+        self.fail("Can not handle character literal. Internal error was: %s" % e)
+    except UnsupportedMultiCharacterCharLiteral:
+        self.fail("Can not handle character literal"
+                  " resulting in multiple decoded characters.")
+```
+
+with:
+
+```python
+if self.match(char_literal_re):
+    prefix = self.last_match.group(1)  # may be None when no prefix
+    data = self.last_match.group(2)
+    try:
+        char_node = ASTCharLiteral(prefix, data)
+    except UnicodeDecodeError as e:
+        self.fail("Can not handle character literal. Internal error was: %s" % e)
+    except UnsupportedMultiCharacterCharLiteral:
+        self.fail("Can not handle character literal"
+                  " resulting in multiple decoded characters.")
+    pos_after_char = self.pos
+    if self.match(identifier_re):
+        return ASTUserDefinedLiteral(char_node, self.matched_text)
+    self.pos = pos_after_char
+    return char_node
+```
+
+Notes and rationale
+- identifier_re is already imported from sphinx.util.cfamily in the file (if not, add it to that import). It is the correct regex to detect identifier-style UDL suffixes (letters/underscores/etc.) and matches the common UDL suffixes such as q_J or _km.
+- The parser saves and restores self.pos so a tentative identifier match doesn’t break other parsing paths.
+- This covers the typical literal+identifier UDL forms (e.g. 6.62607015e-34q_J, 1q_s, "hello"_s). It is intentionally conservative and does not attempt to parse operator""-style special forms or exotic cases; those can be added later if needed.
+- get_id and describe_signature include the suffix so signatures/mangling will reflect the UDL.
+
+Quick test suggestion
+- Add a unit test that parses this snippet and asserts no parse warnings and that the two literals produce ASTUserDefinedLiteral nodes:
+
+inline constexpr auto units::si::planck_constant = 6.62607015e-34q_J * 1q_s;
+
+If you want, I can produce a ready-to-apply git patch (git diff / patch) against the exact cpp.py in your tree or generate the exact replace_in_file calls for your environment — tell me which you prefer and I’ll produce it.----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=48)|
+Error parsing function call: Error parsing response: No `----BEGIN_FUNCTION_CALL----` marker found before `----END_FUNCTION_CALL----`
+
+Your response must strictly follow this format:
+```
+
+your_thoughts_here
+...
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+```
+
+----------------------------
+|MESSAGE(role="assistant", id=49)|
+I'll patch sphinx/domains/cpp.py to add an ASTUserDefinedLiteral node and update _parse_literal to recognize identifier-style UDL suffixes for number/string/char literals (making the change in-place with a small Python script).  
+----BEGIN_FUNCTION_CALL----
+run_bash_cmd
+----ARG----
+command
+python3 - <<'PY'
+import re, sys, io, pathlib
+
+p = pathlib.Path("sphinx/domains/cpp.py")
+if not p.exists():
+    print("ERROR: file not found:", p)
+    sys.exit(1)
+
+s = p.read_text(encoding="utf-8")
+
+if "class ASTUserDefinedLiteral" in s:
+    print("ASTUserDefinedLiteral already present; no change needed.")
+    sys.exit(0)
+
+# 1) Insert ASTUserDefinedLiteral before class ASTThisLiteral(ASTExpression):
+m_this = re.search(r"(?m)^[ \t]*class\s+ASTThisLiteral\s*\(ASTExpression\):", s)
+if not m_this:
+    print("ERROR: Could not find ASTThisLiteral insertion point.")
+    sys.exit(2)
+insert_pos = m_this.start()
+
+udl_class = (
+"  class ASTUserDefinedLiteral(ASTLiteral):\n"
+"      \"\"\"Represents a literal with a user-defined-literal suffix, e.g. 123_km or \"s\"_mysuf.\"\"\"\n"
+"      def __init__(self, literal: ASTLiteral, suffix: str) -> None:\n"
+"          self.literal = literal\n"
+"          self.suffix = suffix\n\n"
+"      def _stringify(self, transform: StringifyTransform) -> str:\n"
+"          return transform(self.literal) + self.suffix\n\n"
+"      def get_id(self, version: int) -> str:\n"
+"          try:\n"
+"              base = self.literal.get_id(version)\n"
+"          except Exception:\n"
+"              base = str(self.literal)\n"
+"          return \"%s_udl_%s\" % (base, self.suffix)\n\n"
+"      def describe_signature(self, signode: TextElement, mode: str,\n"
+"                             env: \"BuildEnvironment\", symbol: \"Symbol\") -> None:\n"
+"          txt = str(self)\n"
+"          signode.append(nodes.Text(txt, txt))\n\n"
+)
+
+s = s[:insert_pos] + udl_class + s[insert_pos:]
+
+# 2) Update _parse_literal numeric block
+# Replace the numeric-literal loop up to the following "string = self._parse_string()"
+parse_start = re.search(r"(?s)def\s+_parse_literal\(self\)\s*->\s*ASTLiteral:\s*", s)
+if not parse_start:
+    print("ERROR: could not locate _parse_literal")
+    sys.exit(3)
+parse_idx = parse_start.start()
+
+# Find numeric block start and end
+num_block_re = re.compile(
+    r"(?P<indent>^[ \t]*)for\s+regex\s+in\s+\[float_literal_re,\s*binary_literal_re,\s*hex_literal_re,\s*integer_literal_re,\s*octal_literal_re\]:\s*\n"
+    r"(?P<body>.*?)(?=^[ \t]*string\s*=\s*self\._parse_string\(\))",
+    re.DOTALL | re.MULTILINE,
+)
+m_num = num_block_re.search(s, parse_idx)
+if not m_num:
+    print("ERROR: numeric literal block not found")
+    sys.exit(4)
+
+indent = m_num.group('indent')
+num_repl = (
+    indent + "for regex in [float_literal_re, binary_literal_re, hex_literal_re,\n"
+    + indent + "              integer_literal_re, octal_literal_re]:\n"
+    + indent + "    pos = self.pos\n"
+    + indent + "    if self.match(regex):\n"
+    + indent + "        # consume integer/float suffix characters (u, l, f, etc.)\n"
+    + indent + "        while self.current_char in 'uUlLfF':\n"
+    + indent + "            self.pos += 1\n"
+    + indent + "        num_node = ASTNumberLiteral(self.definition[pos:self.pos])\n"
+    + indent + "        pos_after_num = self.pos\n"
+    + indent + "        if self.match(identifier_re):\n"
+    + indent + "            return ASTUserDefinedLiteral(num_node, self.matched_text)\n"
+    + indent + "        self.pos = pos_after_num\n"
+    + indent + "        return num_node\n"
+)
+s = s[:m_num.start()] + num_repl + s[m_num.end():]
+
+# 3) Update string literal handling
+str_block_re = re.compile(
+    r"(?m)^[ \t]*string\s*=\s*self\._parse_string\(\)\s*\n[ \t]*if\s+string\s+is\s+not\s+None:\s*\n[ \t]*return\s+ASTStringLiteral\(string\)\s*\n",
+    re.MULTILINE,
+)
+m_str = str_block_re.search(s, parse_idx)
+if not m_str:
+    print("ERROR: string literal block not found")
+    sys.exit(5)
+
+# capture indentation of 'string =' line
+line = s[m_str.start():m_str.end()].splitlines()[0]
+leading = re.match(r"^([ \t]*)", line).group(1)
+str_repl = (
+    leading + "string = self._parse_string()\n"
+    + leading + "if string is not None:\n"
+    + leading + "    str_node = ASTStringLiteral(string)\n"
+    + leading + "    pos_after_str = self.pos\n"
+    + leading + "    if self.match(identifier_re):\n"
+    + leading + "        return ASTUserDefinedLiteral(str_node, self.matched_text)\n"
+    + leading + "    self.pos = pos_after_str\n"
+    + leading + "    return str_node\n"
+)
+s = s[:m_str.start()] + str_repl + s[m_str.end():]
+
+# 4) Update char literal handling
+char_block_re = re.compile(
+    r"(?s)(?P<header>^[ \t]*if\s+self\.match\(char_literal_re\):\s*\n)(?P<body>.*?resulting in multiple decoded characters\.\'\)\s*\n)",
+    re.MULTILINE,
+)
+m_char = char_block_re.search(s, parse_idx)
+if not m_char:
+    # try alternate ending pattern (without the escaped quote)
+    char_block_re2 = re.compile(
+        r"(?s)(?P<header>^[ \t]*if\s+self\.match\(char_literal_re\):\s*\n)(?P<body>.*?resulting in multiple decoded characters\.\)\s*\n)",
+        re.MULTILINE,
+    )
+    m_char = char_block_re2.search(s, parse_idx)
+
+if not m_char:
+    print("ERROR: char literal block not found")
+    sys.exit(6)
+
+header = m_char.group('header')
+body = m_char.group('body')
+# Determine indentation from header
+indent_line = header.splitlines()[0]
+hdr_indent = re.match(r"^([ \t]*)", indent_line).group(1)
+
+char_repl = (
+    header
+    + hdr_indent + "    prefix = self.last_match.group(1)  # may be None when no prefix\n"
+    + hdr_indent + "    data = self.last_match.group(2)\n"
+    + hdr_indent + "    try:\n"
+    + hdr_indent + "        char_node = ASTCharLiteral(prefix, data)\n"
+    + hdr_indent + "    except UnicodeDecodeError as e:\n"
+    + hdr_indent + "        self.fail(\"Can not handle character literal. Internal error was: %s\" % e)\n"
+    + hdr_indent + "    except UnsupportedMultiCharacterCharLiteral:\n"
+    + hdr_indent + "        self.fail(\"Can not handle character literal\"\n"
+    + hdr_indent + "                  \" resulting in multiple decoded characters.\")\n"
+    + hdr_indent + "    pos_after_char = self.pos\n"
+    + hdr_indent + "    if self.match(identifier_re):\n"
+    + hdr_indent + "        return ASTUserDefinedLiteral(char_node, self.matched_text)\n"
+    + hdr_indent + "    self.pos = pos_after_char\n"
+    + hdr_indent + "    return char_node\n"
+)
+
+s = s[:m_char.start()] + char_repl + s[m_char.end():]
+
+# 5) Ensure identifier_re is imported (it should be already). If not, add it to the cfamily import line.
+if "identifier_re" not in s.splitlines()[0:200]:
+    # Find the import from sphinx.util.cfamily
+    cfm_re = re.compile(r"(from\s+sphinx\.util\.cfamily\s+import\s*\(\s*)(?P<rest>.*?)\)", re.DOTALL)
+    mcf = cfm_re.search(s)
+    if mcf:
+        rest = mcf.group('rest')
+        if "identifier_re" not in rest:
+            newrest = rest.strip() + ", identifier_re, "
+            s = s[:mcf.start()] + "from sphinx.util.cfamily import (\n" + newrest + ")\n" + s[mcf.end():]
+            print("Added identifier_re to cfamily imports.")
+    else:
+        # fallback: no import region found; don't fail
+        pass
+
+# Write back
+p.write_text(s, encoding="utf-8")
+print("Patched", p)
+PY
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=50)|
+ERROR: char literal block not found
+
+
+----------------------------
+|MESSAGE(role="assistant", id=51)|
+I'll update the numeric-literal parsing to detect an identifier-style UDL suffix immediately after numbers and return an ASTUserDefinedLiteral when present.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+sphinx/domains/cpp.py
+----ARG----
+from_line
+4660
+----ARG----
+to_line
+4666
+----ARG----
+content
+          for regex in [float_literal_re, binary_literal_re, hex_literal_re,
+                        integer_literal_re, octal_literal_re]:
+              pos = self.pos
+              if self.match(regex):
+                  # consume integer/float suffix characters (u, l, f, etc.)
+                  while self.current_char in 'uUlLfF':
+                      self.pos += 1
+                  num_node = ASTNumberLiteral(self.definition[pos:self.pos])
+                  pos_after_num = self.pos
+                  if self.match(identifier_re):
+                      return ASTUserDefinedLiteral(num_node, self.matched_text)
+                  self.pos = pos_after_num
+                  return num_node
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=52)|
+Error in replace_in_file: [Errno 7] Argument list too long: 'docker'
+
+----------------------------
+|MESSAGE(role="assistant", id=53)|
+I will re-open the literal-parsing region to get exact lines for making a minimal, correctly-indented patch.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sphinx/domains/cpp.py
+----ARG----
+start_line
+4628
+----ARG----
+end_line
+4688
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=54)|
+  4628          if self.current_char != '"':
+  4629              return None
+  4630          startPos = self.pos
+  4631          self.pos += 1
+  4632          escape = False
+  4633          while True:
+  4634              if self.eof:
+  4635                  self.fail("Unexpected end during inside string.")
+  4636              elif self.current_char == '"' and not escape:
+  4637                  self.pos += 1
+  4638                  break
+  4639              elif self.current_char == '\\':
+  4640                  escape = True
+  4641              else:
+  4642                  escape = False
+  4643              self.pos += 1
+  4644          return self.definition[startPos:self.pos]
+        
+  4645      def _parse_literal(self) -> ASTLiteral:
+  4646          # -> integer-literal
+  4647          #  | character-literal
+  4648          #  | floating-literal
+  4649          #  | string-literal
+  4650          #  | boolean-literal -> "false" | "true"
+  4651          #  | pointer-literal -> "nullptr"
+  4652          #  | user-defined-literal
+  4653          self.skip_ws()
+  4654          if self.skip_word('nullptr'):
+  4655              return ASTPointerLiteral()
+  4656          if self.skip_word('true'):
+  4657              return ASTBooleanLiteral(True)
+  4658          if self.skip_word('false'):
+  4659              return ASTBooleanLiteral(False)
+  4660          for regex in [float_literal_re, binary_literal_re, hex_literal_re,
+  4661                        integer_literal_re, octal_literal_re]:
+  4662              pos = self.pos
+  4663              if self.match(regex):
+  4664                  while self.current_char in 'uUlLfF':
+  4665                      self.pos += 1
+  4666                  return ASTNumberLiteral(self.definition[pos:self.pos])
+        
+  4667          string = self._parse_string()
+  4668          if string is not None:
+  4669              return ASTStringLiteral(string)
+        
+  4670          # character-literal
+  4671          if self.match(char_literal_re):
+  4672              prefix = self.last_match.group(1)  # may be None when no prefix
+  4673              data = self.last_match.group(2)
+  4674              try:
+  4675                  return ASTCharLiteral(prefix, data)
+  4676              except UnicodeDecodeError as e:
+  4677                  self.fail("Can not handle character literal. Internal error was: %s" % e)
+  4678              except UnsupportedMultiCharacterCharLiteral:
+  4679                  self.fail("Can not handle character literal"
+  4680                            " resulting in multiple decoded characters.")
+        
+  4681          # TODO: user-defined lit
+  4682          return None
+        
+  4683      def _parse_fold_or_paren_expression(self) -> ASTExpression:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=55)|
+I'll patch sphinx/domains/cpp.py to add ASTUserDefinedLiteral and extend literal parsing to detect identifier-style UDL suffixes for number/string/char literals (small, targeted edits).  
+----BEGIN_FUNCTION_CALL----
+run_bash_cmd
+----ARG----
+command
+python3 - <<'PY'
+import re, sys, pathlib
+
+p = pathlib.Path("sphinx/domains/cpp.py")
+if not p.exists():
+    print("ERROR: file not found:", p)
+    sys.exit(1)
+
+s = p.read_text(encoding="utf-8")
+
+if "class ASTUserDefinedLiteral" in s:
+    print("No change: ASTUserDefinedLiteral already present.")
+    sys.exit(0)
+
+# 1) Insert ASTUserDefinedLiteral before ASTThisLiteral
+m_this = re.search(r"(?m)^[ \t]*class\s+ASTThisLiteral\s*\(ASTExpression\):", s)
+if not m_this:
+    print("ERROR: Could not find ASTThisLiteral insertion point.")
+    sys.exit(2)
+
+udl_class = (
+"  class ASTUserDefinedLiteral(ASTLiteral):\n"
+"      \"\"\"Represents a literal with a user-defined-literal suffix, e.g. 123_km or \"s\"_mysuf.\"\"\"\n"
+"      def __init__(self, literal: ASTLiteral, suffix: str) -> None:\n"
+"          self.literal = literal\n"
+"          self.suffix = suffix\n\n"
+"      def _stringify(self, transform: StringifyTransform) -> str:\n"
+"          return transform(self.literal) + self.suffix\n\n"
+"      def get_id(self, version: int) -> str:\n"
+"          try:\n"
+"              base = self.literal.get_id(version)\n"
+"          except Exception:\n"
+"              base = str(self.literal)\n"
+"          return \"%s_udl_%s\" % (base, self.suffix)\n\n"
+"      def describe_signature(self, signode: TextElement, mode: str,\n"
+"                             env: \"BuildEnvironment\", symbol: \"Symbol\") -> None:\n"
+"          txt = str(self)\n"
+"          signode.append(nodes.Text(txt, txt))\n\n"
+)
+
+s = s[:m_this.start()] + udl_class + s[m_this.start():]
+
+# 2) Replace numeric literal handling to detect UDL suffixes
+num_pattern = re.compile(
+    r"(for\s+regex\s+in\s+\[float_literal_re,\s*binary_literal_re,\s*hex_literal_re,\s*integer_literal_re,\s*octal_literal_re\]:\s*\n\s*pos\s*=\s*self\.pos\s*\n\s*if\s+self\.match\(regex\):\s*\n\s*while\s+self\.current_char\s+in\s+'uUlLfF':\s*\n\s*self\.pos\s*\+=\s*1\s*\n\s*return\s+ASTNumberLiteral\(self\.definition\[pos:self\.pos\]\)\s*)",
+    re.DOTALL,
+)
+if not num_pattern.search(s):
+    print("WARNING: numeric literal block not found; skipping numeric replacement.")
+else:
+    num_repl = (
+"for regex in [float_literal_re, binary_literal_re, hex_literal_re,\n"
+"              integer_literal_re, octal_literal_re]:\n"
+"    pos = self.pos\n"
+"    if self.match(regex):\n"
+"        # consume integer/float suffix characters (u, l, f, etc.)\n"
+"        while self.current_char in 'uUlLfF':\n"
+"            self.pos += 1\n"
+"        num_node = ASTNumberLiteral(self.definition[pos:self.pos])\n"
+"        pos_after_num = self.pos\n"
+"        if self.match(identifier_re):\n"
+"            return ASTUserDefinedLiteral(num_node, self.matched_text)\n"
+"        self.pos = pos_after_num\n"
+"        return num_node\n"
+)
+    s = num_pattern.sub(num_repl, s, count=1)
+
+# 3) Replace string literal handling to detect UDL suffixes
+str_pattern = re.compile(
+    r"(^\s*string\s*=\s*self\._parse_string\(\)\s*\n\s*if\s+string\s+is\s+not\s+None:\s*\n\s*return\s+ASTStringLiteral\(string\)\s*)",
+    re.MULTILINE,
+)
+if not str_pattern.search(s):
+    print("WARNING: string literal block not found; skipping string replacement.")
+else:
+    # preserve leading indentation
+    m = str_pattern.search(s)
+    leading = re.match(r"^(\s*)", m.group(0)).group(1)
+    str_repl = (
+f"{leading}string = self._parse_string()\n"
+f"{leading}if string is not None:\n"
+f"{leading}    str_node = ASTStringLiteral(string)\n"
+f"{leading}    pos_after_str = self.pos\n"
+f"{leading}    if self.match(identifier_re):\n"
+f"{leading}        return ASTUserDefinedLiteral(str_node, self.matched_text)\n"
+f"{leading}    self.pos = pos_after_str\n"
+f"{leading}    return str_node\n"
+)
+    s = s[:m.start()] + str_repl + s[m.end():]
+
+# 4) Replace char literal block (the entire if self.match(char_literal_re): ... except blocks)
+char_pattern = re.compile(
+    r"(?ms)^[ \t]*if\s+self\.match\(char_literal_re\):\s*\n.*?resulting in multiple decoded characters\.\)\s*$",
+    re.MULTILINE,
+)
+if not char_pattern.search(s):
+    # try a slightly different end pattern (without the escaped quote)
+    char_pattern2 = re.compile(
+        r"(?ms)^[ \t]*if\s+self\.match\(char_literal_re\):\s*\n.*?resulting in multiple decoded characters\.\)\s*",
+        re.MULTILINE,
+    )
+    if char_pattern2.search(s):
+        char_pattern = char_pattern2
+    else:
+        print("WARNING: char literal block not found; skipping char replacement.")
+        # write current changes if any and exit successfully
+        p.write_text(s, encoding="utf-8")
+        print("Patched (partial) written to", p)
+        sys.exit(0)
+
+# Build replacement for char block
+# Determine indentation by finding the original block's first line indentation
+mchar = char_pattern.search(s)
+first_line = s[mchar.start():mchar.start()+50].splitlines()[0]
+hdr_indent = re.match(r"^([ \t]*)", first_line).group(1)
+
+char_repl = (
+f"{hdr_indent}if self.match(char_literal_re):\n"
+f"{hdr_indent}    prefix = self.last_match.group(1)  # may be None when no prefix\n"
+f"{hdr_indent}    data = self.last_match.group(2)\n"
+f"{hdr_indent}    try:\n"
+f"{hdr_indent}        char_node = ASTCharLiteral(prefix, data)\n"
+f"{hdr_indent}    except UnicodeDecodeError as e:\n"
+f"{hdr_indent}        self.fail(\"Can not handle character literal. Internal error was: %s\" % e)\n"
+f"{hdr_indent}    except UnsupportedMultiCharacterCharLiteral:\n"
+f"{hdr_indent}        self.fail(\"Can not handle character literal\"\n"
+f"{hdr_indent}                  \" resulting in multiple decoded characters.\")\n"
+f"{hdr_indent}    pos_after_char = self.pos\n"
+f"{hdr_indent}    if self.match(identifier_re):\n"
+f"{hdr_indent}        return ASTUserDefinedLiteral(char_node, self.matched_text)\n"
+f"{hdr_indent}    self.pos = pos_after_char\n"
+f"{hdr_indent}    return char_node\n"
+)
+
+s = s[:mchar.start()] + char_repl + s[mchar.end():]
+
+# 5) Write file back
+p.write_text(s, encoding="utf-8")
+print("Patched", p)
+PY
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=56)|
+WARNING: char literal block not found; skipping char replacement.
+Patched (partial) written to sphinx/domains/cpp.py
+
+
+----------------------------
+|MESSAGE(role="assistant", id=57)|
+I added UDL support (ASTUserDefinedLiteral + number/string UDL detection) to sphinx/domains/cpp.py and wrote the updated file; I'll show the git diff now to verify the changes.  
+----BEGIN_FUNCTION_CALL----
+git_diff
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=58)|
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+index fe52d881d..22e81defb 100644
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -882,6 +882,27 @@ class ASTCharLiteral(ASTLiteral):
+         signode.append(nodes.Text(txt, txt))
+ 
+ 
++  class ASTUserDefinedLiteral(ASTLiteral):
++      """Represents a literal with a user-defined-literal suffix, e.g. 123_km or "s"_mysuf."""
++      def __init__(self, literal: ASTLiteral, suffix: str) -> None:
++          self.literal = literal
++          self.suffix = suffix
++
++      def _stringify(self, transform: StringifyTransform) -> str:
++          return transform(self.literal) + self.suffix
++
++      def get_id(self, version: int) -> str:
++          try:
++              base = self.literal.get_id(version)
++          except Exception:
++              base = str(self.literal)
++          return "%s_udl_%s" % (base, self.suffix)
++
++      def describe_signature(self, signode: TextElement, mode: str,
++                             env: "BuildEnvironment", symbol: "Symbol") -> None:
++          txt = str(self)
++          signode.append(nodes.Text(txt, txt))
++
+ class ASTThisLiteral(ASTExpression):
+     def _stringify(self, transform: StringifyTransform) -> str:
+         return "this"
+@@ -4659,18 +4680,27 @@ class DefinitionParser(BaseParser):
+         if self.skip_word('false'):
+             return ASTBooleanLiteral(False)
+         for regex in [float_literal_re, binary_literal_re, hex_literal_re,
+-                      integer_literal_re, octal_literal_re]:
+-            pos = self.pos
+-            if self.match(regex):
+-                while self.current_char in 'uUlLfF':
+-                    self.pos += 1
+-                return ASTNumberLiteral(self.definition[pos:self.pos])
+-
+-        string = self._parse_string()
+-        if string is not None:
+-            return ASTStringLiteral(string)
+-
+-        # character-literal
++              integer_literal_re, octal_literal_re]:
++    pos = self.pos
++    if self.match(regex):
++        # consume integer/float suffix characters (u, l, f, etc.)
++        while self.current_char in 'uUlLfF':
++            self.pos += 1
++        num_node = ASTNumberLiteral(self.definition[pos:self.pos])
++        pos_after_num = self.pos
++        if self.match(identifier_re):
++            return ASTUserDefinedLiteral(num_node, self.matched_text)
++        self.pos = pos_after_num
++        return num_node
++string = self._parse_string()
++if string is not None:
++    str_node = ASTStringLiteral(string)
++    pos_after_str = self.pos
++    if self.match(identifier_re):
++        return ASTUserDefinedLiteral(str_node, self.matched_text)
++    self.pos = pos_after_str
++    return str_node
++# character-literal
+         if self.match(char_literal_re):
+             prefix = self.last_match.group(1)  # may be None when no prefix
+             data = self.last_match.group(2)
+
