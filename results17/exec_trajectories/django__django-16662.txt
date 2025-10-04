@@ -1,0 +1,702 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Use search_in_directory to find relevant files or patterns
+   - Use find_file to locate files by name
+   - Use search_in_file for precise in-file queries
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - Use replace_in_file for small, targeted changes
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd, check_syntax for Python) as appropriate
+5) Finish
+   - Call git_diff to confirm actual changes
+   - If the diff is correct, finish() with a brief summary of the fix
+
+Key rules for safe editing:
+- Always read the file before editing
+- After any replace_in_file, re-read the file (line numbers change)
+- Match indentation exactly:
+  - Use real tabs/spaces as present in the file (do not write literal 	 or 
+)
+  - Do not mix tabs and spaces
+- Make minimal changes; avoid unnecessary refactors
+- Line numbers are 1-indexed and inclusive (from_line and to_line are both included)
+- from_line and to_line must be integers
+- Keep content small and focused:
+  - Prefer small edits (<100 lines)
+  - For larger transformations, consider a scripted approach via run_bash_cmd
+- Make decisions autonomously; do not ask the user for choices or input
+- Before finishing, verify that git_diff shows changes; if not, adjust and try again
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid:
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- Stale line numbers (not re-reading after edits)
+- Indentation mismatches (tabs vs spaces)
+- Finishing without making actual changes
+- Asking the user for input or choices
+
+Search strategies:
+- Start broad with search_in_directory; narrow with search_in_file
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Prefer replace_in_file for small, precise changes
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+How to finish:
+- Use git_diff to verify changes were applied
+- Then call finish("Brief summary of what changed and why")
+- Ensure that you have made code changes, verified by git_diff, before calling finish
+- Do not finish if no changes were made
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I’ll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example workflow (concise):
+1) search_in_directory → 2) show_file → 3) replace_in_file → 4) show_file (re-read) → 5) tests via run_bash_cmd → 6) git_diff → 7) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message or error description
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+
+Returns:
+    Matching lines with line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: search_in_directory(pattern: str, directory: str = '.') -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: get_file_content(file_path: str) -> str
+Return the entire content of the file as a string.
+
+Function: set_file_content(file_path: str, content: str) -> str
+Overwrite the file with the given content.
+
+Function: regex_replace_in_file(file_path: str, pattern: str, replacement: str, use_regex: bool = True) -> str
+Replace pattern with replacement in the file (regex or literal).
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: check_syntax(file_path: str) -> str
+Check if a Python file has valid syntax after editing.
+Useful to quickly verify you didn't introduce syntax errors.
+
+Args:
+    file_path (str): path to the Python file to check
+    
+Returns:
+    Success message or syntax error details
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+Migration import ordering violates coding style and isort defaults
+Description
+	
+New migration files are generated with imports sorted by module, independent of import style. For example:
+import datetime
+from django.db import migrations, models
+import time
+The ​Django coding style specifies:
+Place all import module statements before from module import objects in each section.
+This guidance is the same as what isort does by default, ​as documented here. Newly generated migrations can fail isort for this reason.
+This would mean migration files should instead be generated like this:
+import datetime
+import time
+from django.db import migrations, models
+For reference, previous issues related to migration import sorting: #24155, #25384.
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I will search the repository for code that generates migration files or contains the problematic import ordering (e.g., "from django.db import migrations, models") so I can inspect and fix how imports are written. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+from django.db import migrations, models
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+./tests/postgres_tests/array_index_migrations/0001_initial.py:2:from django.db import migrations, models
+./tests/postgres_tests/array_default_migrations/0002_integerarraymodel_field_2.py:2:from django.db import migrations, models
+./tests/postgres_tests/array_default_migrations/0001_initial.py:2:from django.db import migrations, models
+./tests/postgres_tests/migrations/0002_create_test_models.py:1:from django.db import migrations, models
+./tests/migrations2/test_migrations_2/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations2/test_migrations_2_no_deps/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations2/test_migrations_2_first/0002_second.py:1:from django.db import migrations, models
+./tests/migrations2/test_migrations_2_first/0001_initial.py:1:from django.db import migrations, models
+./tests/migration_test_data_persistence/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_squashed/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_squashed/0001_squashed_0002.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_squashed/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_custom_user/0001_initial.py:2:from django.db import migrations, models
+./tests/migrations/test_migrations_manual_porting/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_conflict_long_name/0002_conflicting_second_migration_with_long_name.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_conflict_long_name/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_conflict_long_name/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_no_changes/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_no_changes/0003_third.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_no_changes/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_namespace_package/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_squashed_no_replaces/0001_squashed_0002.py:1:from django.db import migrations, models
+./tests/migrations/test_writer.py:21:from django.db import migrations, models
+./tests/migrations/test_writer.py:921:            "import datetime\nfrom django.db import migrations, models\n",
+./tests/migrations/test_migrations_first/second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_first/thefirst.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_unmigdep/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_plan/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_plan/0003_third.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_plan/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/deprecated_field_migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_run_before/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_run_before/0003_third.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_run_before/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_fake_initial_case_insensitive/fake_initial/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_fake_initial_case_insensitive/initial/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_auto_now_add/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/conflicting_app_with_dependencies/migrations/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/conflicting_app_with_dependencies/migrations/0002_conflicting_second.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/conflicting_app_with_dependencies/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/mutate_state_b/migrations/0002_add_field.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/mutate_state_b/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/migrated_app/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_c/migrations/0002_c2.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_c/migrations/0003_c3.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_c/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/migrated_unapplied_app/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_b/migrations/0002_b2.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_b/migrations/0003_b3.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_b/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/unspecified_app_with_conflict/migrations/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/unspecified_app_with_conflict/migrations/0002_conflicting_second.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/unspecified_app_with_conflict/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/mutate_state_a/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/alter_fk/book_app/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/alter_fk/author_app/migrations/0002_alter_id.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/alter_fk/author_app/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_a/migrations/0003_a3.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_a/migrations/0004_a4.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_a/migrations/0002_a2.py:1:from django.db import migrations, models
+./tests/migrations/migrations_test_apps/lookuperror_a/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_no_ancestor/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_no_ancestor/0002_conflicting_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_no_ancestor/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_no_default/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_atomic_operation/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_optimizer.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_initial_false/0001_not_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_conflict/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_conflict/0002_conflicting_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_conflict/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_add_many_to_many_field_initial/0002_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_add_many_to_many_field_initial/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_non_atomic/0001_initial.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_fake_split_initial/0002_second.py:1:from django.db import migrations, models
+./tests/migrations/test_migrations_fake_split_initial/0001_initial.py:1:from django.db import migrations, models
+./tests/backends/base/app_unmigrated/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/db_functions/migrations/0002_create_test_models.py:1:from django.db import migrations, models
+./tests/contenttypes_tests/test_operations.py:6:from django.db import migrations, models
+./tests/contenttypes_tests/operations_migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/admin_scripts/another_app_waiting_migration/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/admin_scripts/app_waiting_migration/migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/migrate_signals/custom_migrations/0001_initial.py:1:from django.db import migrations, models
+./tests/sites_framework/migrations/0001_initial.py:1:from django.db import migrations, models
+./django/contrib/admin/migrations/0003_logentry_add_action_flag_choices.py:1:from django.db import migrations, models
+./django/contrib/admin/migrations/0002_logentry_remove_auto_add.py:1:from django.db import migrations, models
+./django/contrib/admin/migrations/0001_initial.py:3:from django.db import migrations, models
+./django/contrib/redirects/migrations/0002_alter_redirect_new_path_help_text.py:1:from django.db import migrations, models
+./django/contrib/redirects/migrations/0001_initial.py:1:from django.db import migrations, models
+./django/contrib/sessions/migrations/0001_initial.py:2:from django.db import migrations, models
+./django/contrib/flatpages/migrations/0001_initial.py:1:from django.db import migrations, models
+./django/contrib/contenttypes/migrations/0002_remove_content_type_name.py:1:from django.db import migrations, models
+./django/contrib/contenttypes/migrations/0001_initial.py:2:from django.db import migrations, models
+./django/contrib/auth/migrations/0004_alter_user_username_opts.py:2:from django.db import migrations, models
+./django/contrib/auth/migrations/0003_alter_user_email_max_length.py:1:from django.db import migrations, models
+./django/contrib/auth/migrations/0007_alter_validators_add_error_messages.py:2:from django.db import migrations, models
+./django/contrib/auth/migrations/0005_alter_user_last_login_null.py:1:from django.db import migrations, models
+./django/contrib/auth/migrations/0012_alter_user_first_name_max_length.py:1:from django.db import migrations, models
+./django/contrib/auth/migrations/0002_alter_permission_name_max_length.py:1:from django.db import migrations, models
+./django/contrib/auth/migrations/0001_initial.py:3:from django.db import migrations, models
+./django/contrib/auth/migrations/0010_alter_group_name_max_length.py:1:from django.db import migrations, models
+./django/contrib/auth/migrations/0008_alter_user_username_max_length.py:2:from django.db import migrations, models
+./django/contrib/auth/migrations/0009_alter_user_last_name_max_length.py:1:from django.db import migrations, models
+./django/contrib/sites/migrations/0002_alter_domain_unique.py:2:from django.db import migrations, models
+./django/contrib/sites/migrations/0001_initial.py:3:from django.db import migrations, models
+./django/db/migrations/writer.py:172:            imports.add("from django.db import migrations, models")
+./docs/howto/writing-migrations.txt:105:    from django.db import migrations, models
+./docs/howto/writing-migrations.txt:348:    from django.db import migrations, models
+./docs/topics/migrations.txt:232:    from django.db import migrations, models
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll open the migrations writer to inspect how the imports set is constructed around the reported line so I can make a minimal change to order module imports before "from ..." imports. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+150
+----ARG----
+end_line
+210
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+   150                  dependencies.append(
+   151                      "        migrations.swappable_dependency(settings.%s),"
+   152                      % dependency[1]
+   153                  )
+   154                  imports.add("from django.conf import settings")
+   155              else:
+   156                  dependencies.append("        %s," % self.serialize(dependency)[0])
+   157          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+        
+   158          # Format imports nicely, swapping imports of functions from migration files
+   159          # for comments
+   160          migration_imports = set()
+   161          for line in list(imports):
+   162              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+   163                  migration_imports.add(line.split("import")[1].strip())
+   164                  imports.remove(line)
+   165                  self.needs_manual_porting = True
+        
+   166          # django.db.migrations is always used, but models import may not be.
+   167          # If models import exists, merge it with migrations import.
+   168          if "from django.db import models" in imports:
+   169              imports.discard("from django.db import models")
+   170              imports.add("from django.db import migrations, models")
+   171          else:
+   172              imports.add("from django.db import migrations")
+        
+   173          # Sort imports by the package / module to be imported (the part after
+   174          # "from" in "from ... import ..." or after "import" in "import ...").
+   175          sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+   176          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+   177          if migration_imports:
+   178              items["imports"] += (
+   179                  "\n\n# Functions from the following migrations need manual "
+   180                  "copying.\n# Move them and any dependencies into this file, "
+   181                  "then update the\n# RunPython operations to refer to the local "
+   182                  "versions:\n# %s"
+   183              ) % "\n# ".join(sorted(migration_imports))
+   184          # If there's a replaces, make a string for it
+   185          if self.migration.replaces:
+   186              items["replaces_str"] = (
+   187                  "\n    replaces = %s\n" % self.serialize(self.migration.replaces)[0]
+   188              )
+   189          # Hinting that goes into comment
+   190          if self.include_header:
+   191              items["migration_header"] = MIGRATION_HEADER_TEMPLATE % {
+   192                  "version": get_version(),
+   193                  "timestamp": now().strftime("%Y-%m-%d %H:%M"),
+   194              }
+   195          else:
+   196              items["migration_header"] = ""
+        
+   197          if self.migration.initial:
+   198              items["initial_str"] = "\n    initial = True\n"
+        
+   199          return MIGRATION_TEMPLATE % items
+        
+   200      @property
+   201      def basedir(self):
+   202          migrations_package_name, _ = MigrationLoader.migrations_module(
+   203              self.migration.app_label
+   204          )
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I will update the import-sorting logic in django/db/migrations/writer.py so plain "import X" lines are placed before "from Y import Z" lines while keeping alphabetical ordering within each group. 
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+173
+----ARG----
+to_line
+176
+----ARG----
+content
+          # Sort imports: module imports ("import ...") should come before "from ..."
+          # imports, but both groups are sorted alphabetically by the module/package name.
+          module_imports = sorted([i for i in imports if i.startswith("import ")], key=lambda i: i.split()[1])
+          from_imports = sorted([i for i in imports if i.startswith("from ")], key=lambda i: i.split()[1])
+          sorted_imports = module_imports + from_imports
+          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+Successfully replaced lines 173-176 in django/db/migrations/writer.py. Replaced 4 lines with 6 lines.
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I'll re-open the writer file to verify the updated import-sorting logic and surrounding context.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+160
+----ARG----
+end_line
+186
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+   160          # for comments
+   161          migration_imports = set()
+   162          for line in list(imports):
+   163              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+   164                  migration_imports.add(line.split("import")[1].strip())
+   165                  imports.remove(line)
+   166                  self.needs_manual_porting = True
+        
+   167          # django.db.migrations is always used, but models import may not be.
+   168          # If models import exists, merge it with migrations import.
+   169          if "from django.db import models" in imports:
+   170              imports.discard("from django.db import models")
+   171              imports.add("from django.db import migrations, models")
+   172  # Sort imports: module imports ("import ...") should come before "from ..."
+   173            # imports, but both groups are sorted alphabetically by the module/package name.
+   174            module_imports = sorted([i for i in imports if i.startswith("import ")], key=lambda i: i.split()[1])
+   175            from_imports = sorted([i for i in imports if i.startswith("from ")], key=lambda i: i.split()[1])
+   176            sorted_imports = module_imports + from_imports
+   177            items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+   178          # "from" in "from ... import ..." or after "import" in "import ...").
+   179          sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+   180          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+   181          if migration_imports:
+   182              items["imports"] += (
+   183                  "\n\n# Functions from the following migrations need manual "
+   184                  "copying.\n# Move them and any dependencies into this file, "
+   185                  "then update the\n# RunPython operations to refer to the local "
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+The new sorting block left the old sorting code in place and has inconsistent indentation; I'll re-open the nearby lines to pick exact indentation before making a focused replace to remove the duplicate lines. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+168
+----ARG----
+end_line
+186
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+   168          # django.db.migrations is always used, but models import may not be.
+   169          # If models import exists, merge it with migrations import.
+   170          if "from django.db import models" in imports:
+   171              imports.discard("from django.db import models")
+   172              imports.add("from django.db import migrations, models")
+   173  # Sort imports: module imports ("import ...") should come before "from ..."
+   174            # imports, but both groups are sorted alphabetically by the module/package name.
+   175            module_imports = sorted([i for i in imports if i.startswith("import ")], key=lambda i: i.split()[1])
+   176            from_imports = sorted([i for i in imports if i.startswith("from ")], key=lambda i: i.split()[1])
+   177            sorted_imports = module_imports + from_imports
+   178            items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+   179          # "from" in "from ... import ..." or after "import" in "import ...").
+   180          sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+   181          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+   182          if migration_imports:
+   183              items["imports"] += (
+   184                  "\n\n# Functions from the following migrations need manual "
+   185                  "copying.\n# Move them and any dependencies into this file, "
+   186                  "then update the\n# RunPython operations to refer to the local "
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I will replace the duplicated and mis-indented sorting code with a correctly indented block that groups "import ..." lines before "from ..." lines and sorts each group alphabetically. 
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+173
+----ARG----
+to_line
+181
+----ARG----
+content
+          # Sort imports: module imports ("import ...") should come before "from ..."
+          # imports, but both groups are sorted alphabetically by the module/package name.
+          module_imports = sorted(
+              [i for i in imports if i.startswith("import ")],
+              key=lambda i: i.split()[1],
+          )
+          from_imports = sorted(
+              [i for i in imports if i.startswith("from ")],
+              key=lambda i: i.split()[1],
+          )
+          sorted_imports = module_imports + from_imports
+          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+Successfully replaced lines 173-181 in django/db/migrations/writer.py. Replaced 9 lines with 12 lines.
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I'll run git_diff to verify the changes made to django/db/migrations/writer.py before finishing.
+----BEGIN_FUNCTION_CALL----
+git_diff
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+diff --git a/django/db/migrations/writer.py b/django/db/migrations/writer.py
+index a59f0c8dcb..7cbab10136 100644
+--- a/django/db/migrations/writer.py
++++ b/django/db/migrations/writer.py
+@@ -170,13 +170,18 @@ class MigrationWriter:
+         if "from django.db import models" in imports:
+             imports.discard("from django.db import models")
+             imports.add("from django.db import migrations, models")
+-        else:
+-            imports.add("from django.db import migrations")
+-
+-        # Sort imports by the package / module to be imported (the part after
+-        # "from" in "from ... import ..." or after "import" in "import ...").
+-        sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+-        items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
++# Sort imports: module imports ("import ...") should come before "from ..."
++          # imports, but both groups are sorted alphabetically by the module/package name.
++          module_imports = sorted(
++              [i for i in imports if i.startswith("import ")],
++              key=lambda i: i.split()[1],
++          )
++          from_imports = sorted(
++              [i for i in imports if i.startswith("from ")],
++              key=lambda i: i.split()[1],
++          )
++          sorted_imports = module_imports + from_imports
++          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+         if migration_imports:
+             items["imports"] += (
+                 "\n\n# Functions from the following migrations need manual "
+
