@@ -1,0 +1,75 @@
+diff --git a/django/contrib/staticfiles/storage.py b/django/contrib/staticfiles/storage.py
+index 494890cc23..83a93c87d2 100644
+--- a/django/contrib/staticfiles/storage.py
++++ b/django/contrib/staticfiles/storage.py
+@@ -188,9 +188,6 @@ class HashedFilesMixin:
+                 self._stored_name, unquote(target_name),
+                 force=True, hashed_files=hashed_files,
+             )
+-
+-            transformed_url = '/'.join(url_path.split('/')[:-1] + hashed_url.split('/')[-1:])
+-
+             # Restore the fragment that was stripped off earlier.
+             if fragment:
+                 transformed_url += ('?#' if '?#' in url else '#') + fragment
+@@ -226,13 +223,59 @@ class HashedFilesMixin:
+             path for path in paths
+             if matches_patterns(path, self._patterns)
+         ]
++
++        # Keep a copy of the original paths so we can yield results
++        # for each original name exactly once at the end.
++        original_paths = dict(paths)
++
++        # Collect results per original name to avoid yielding the same
++        # original filename multiple times across multiple passes.
++        results = {}
++
+         # Do a single pass first. Post-process all files once, then repeat for
+         # adjustable files.
+         for name, hashed_name, processed, _ in self._post_process(paths, adjustable_paths, hashed_files):
+-            yield name, hashed_name, processed
++            results[name] = (hashed_name, processed)
+ 
+         paths = {path: paths[path] for path in adjustable_paths}
+ 
++        for i in range(self.max_post_process_passes):
++            substitutions = False
++            for name, hashed_name, processed, subst in self._post_process(paths, adjustable_paths, hashed_files):
++                # update the latest result for this name
++                results[name] = (hashed_name, processed)
++                substitutions = substitutions or subst
++
++            if not substitutions:
++                break
++
++        if substitutions:
++            # Preserve original behavior for max passes exceeded.
++            yield 'All', None, RuntimeError('Max post-process passes exceeded.')
++
++        # Yield each original name exactly once, using the latest processed result.
++        for name in original_paths:
++            if name in results:
++                hashed_name, processed = results[name]
++                yield name, hashed_name, processed
++
++                substitutions = substitutions or subst
++
++            if not substitutions:
++                break
++
++        if substitutions:
++            # Preserve original behavior for max passes exceeded.
++            yield 'All', None, RuntimeError('Max post-process passes exceeded.')
++
++        # Yield each original name exactly once, using the latest processed result.
++        for name in original_paths:
++            if name in results:
++                hashed_name, processed = results[name]
++                yield name, hashed_name, processed
++
++        # Store the processed paths
++        self.hashed_files.update(hashed_files)
+         for i in range(self.max_post_process_passes):
+             substitutions = False
+             for name, hashed_name, processed, subst in self._post_process(paths, adjustable_paths, hashed_files):
