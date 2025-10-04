@@ -101,12 +101,24 @@ class SWEEnvironment:
             new_lines = lines[:from_line-1] + content_lines + lines[to_line:]
             new_content = '\n'.join(new_lines)
             
-            # Write back to file using Python for reliability
-            import base64
-            encoded_content = base64.b64encode(new_content.encode()).decode()
-            cmd = f"echo '{encoded_content}' | base64 -d > {file_path}"
+            # Write to temporary file first to avoid argument list too long errors
+            import tempfile
+            import os
+            temp_file = '/tmp/swe_agent_temp_edit.txt'
             
-            self.env.execute(cmd)
+            # Write content to temp file using Python (more reliable for large files)
+            write_cmd = f"""python3 -c "
+import sys
+content = {repr(new_content)}
+with open('{temp_file}', 'w') as f:
+    f.write(content)
+" """
+            self.env.execute(write_cmd)
+            
+            # Copy temp file to target
+            self.env.execute(f"cp {temp_file} {file_path}")
+            self.env.execute(f"rm {temp_file}")
+            
             return f"Successfully replaced lines {from_line}-{to_line} in {file_path}. Replaced {to_line-from_line+1} lines with {len(content_lines)} lines."
             
         except Exception as e:
