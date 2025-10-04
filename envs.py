@@ -1251,7 +1251,7 @@ TASK DESCRIPTION:
 CODE CHANGES (git diff):
 {patch}  
 
-Your job is to determine if these changes solve the task described above.
+Your job is to determine if these changes solve the task described above. Remember, it doesn't matter how the code has been implemented or what changes it makes, as long as it solves the unit tests. Do not provide any comments on styling/documentation/readability/etc, just focus on whether the changes solve the task and the unit tests.
 
 Respond in this exact format:
 ```
@@ -1265,8 +1265,10 @@ Focus on:
 2. Is the implementation reasonable and appropriate?
 3. Are there obvious bugs or issues that would prevent this from working?
 4. Ensure that your response always contains "VERDICT: <>" followed by "END_OF_JUDGE_RESPONSE" in the next line.
+5. If providing feedback, prescribe targetted changes, referring to specific files and lines.
+6. The patch may sometimes just contain placeholder code, you should reject if that's the case. Only approve if the changes are expected to fix the task and the unit tests.
 
-Be pragmatic - minor style issues don't warrant rejection. Reject only if the changes clearly don't solve the task or have critical bugs."""
+Reject only if the changes clearly don't solve the task or have critical bugs."""
 
         try:
             # Use a fast model for judging
