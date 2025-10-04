@@ -59,13 +59,16 @@ class SWEEnvironment:
     def replace_in_file(self, file_path: str, from_line: int, to_line: int, content: str) -> str:
         """
         Replace the content of the file from the given line to the given line with the given content.
-        Line numbers are 1-indexed.
+        Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+        
+        CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+        Read the file first to see the exact indentation, then match it in your content.
         
         Args:
             file_path (str): path to the file to edit
-            from_line (int): starting line number (1-indexed, inclusive)
+            from_line (int): starting line number (1-indexed, inclusive) 
             to_line (int): ending line number (1-indexed, inclusive)
-            content (str): new content to replace the lines
+            content (str): new content to replace the lines (must preserve exact indentation)
         
         Returns:
             Success message or error description
@@ -93,7 +96,9 @@ class SWEEnvironment:
                 return f"Error: to_line ({to_line}) exceeds file length ({len(lines)})"
             
             # Replace lines (convert to 0-indexed)
-            new_lines = lines[:from_line-1] + [content] + lines[to_line:]
+            # Split content into lines to maintain structure
+            content_lines = content.split('\n')
+            new_lines = lines[:from_line-1] + content_lines + lines[to_line:]
             new_content = '\n'.join(new_lines)
             
             # Write back to file using Python for reliability
@@ -102,7 +107,7 @@ class SWEEnvironment:
             cmd = f"echo '{encoded_content}' | base64 -d > {file_path}"
             
             self.env.execute(cmd)
-            return f"Successfully replaced lines {from_line}-{to_line} in {file_path}"
+            return f"Successfully replaced lines {from_line}-{to_line} in {file_path}. Replaced {to_line-from_line+1} lines with {len(content_lines)} lines."
             
         except Exception as e:
             import traceback
@@ -258,7 +263,8 @@ class SWEEnvironment:
         try:
             if match_indentation:
                 # Get prev line to detect indent
-                prev = self.env.execute(f"sed -n '{line_num-1}p' {file_path}")
+                prev_result = self.env.execute(f"sed -n '{line_num-1}p' {file_path}")
+                prev = prev_result['output'] if isinstance(prev_result, dict) else str(prev_result)
                 indent = len(prev) - len(prev.lstrip())
                 content = '\n'.join(' ' * indent + l for l in content.split('\n'))
             import base64
@@ -283,6 +289,7 @@ class SWEEnvironment:
     def run_python_snippet(self, code: str) -> str:
         """
         Run the given Python code in the container and return output.
+        Useful for testing or complex file operations.
         """
         try:
             import base64
@@ -291,6 +298,43 @@ class SWEEnvironment:
             return self.env.execute(cmd)['output']
         except Exception as e:
             return f"Error: {str(e)}"
+    
+    def run_tests(self, test_cmd: "str | None" = None) -> str:
+        """
+        Run the test suite or specific tests to validate changes.
+        If no test_cmd provided, tries to auto-detect test command.
+        
+        Args:
+            test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+        
+        Returns:
+            Test output
+        """
+        try:
+            if test_cmd is None:
+                # Try to auto-detect test framework
+                for cmd in ["pytest --co -q", "python -m pytest --co -q", "python manage.py test --help", "python -m unittest --help"]:
+                    try:
+                        result = self.env.execute(cmd)
+                        if "pytest" in cmd and result.get('output'):
+                            test_cmd = "pytest -xvs"
+                            break
+                        elif "manage.py" in cmd:
+                            test_cmd = "python manage.py test"
+                            break
+                        elif "unittest" in cmd:
+                            test_cmd = "python -m unittest discover"
+                            break
+                    except:
+                        continue
+                
+                if test_cmd is None:
+                    return "Could not auto-detect test command. Please provide test_cmd argument."
+            
+            result = self.env.execute(f"timeout 120 {test_cmd}")
+            return result['output']
+        except Exception as e:
+            return f"Test execution error: {str(e)}"
 
     def detect_indentation(self, file_path: str) -> str:
         """
@@ -306,6 +350,20 @@ class SWEEnvironment:
             return "No indentation detected"
         except Exception as e:
             return f"Error: {str(e)}"
+    
+    def git_diff(self) -> str:
+        """
+        Show current git diff to see what changes have been made so far.
+        Useful to verify your edits and see if you're on the right track.
+        
+        Returns:
+            Git diff output showing all current changes
+        """
+        try:
+            result = self.env.execute("git diff")
+            return result['output'] if result['output'].strip() else "No changes yet."
+        except Exception as e:
+            return f"Error getting git diff: {str(e)}"
 
 class DumbEnvironment:
     """
