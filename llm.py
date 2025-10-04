@@ -1,4 +1,11 @@
 from abc import ABC, abstractmethod
+import os
+
+try:
+    from vllm import LLM as VLLM
+    from vllm import SamplingParams
+except ImportError:
+    pass
 
 
 class LLM(ABC):
@@ -22,13 +29,27 @@ class OpenAIModel(LLM):
     format required by ResponseParser and include the stop token in the output string.
     """
 
-    def __init__(self, stop_token: str, model_name: str = "gpt-5-mini"):
-        # TODO(student): Initialize your OpenAI client or chosen LLM provider here.
+    def __init__(self, stop_token: str, model_name: str = "gpt-5-mini", openai_model: bool = True):
         self.stop_token = stop_token
         self.model_name = model_name
-        raise NotImplementedError("OpenAIModel.__init__ must be implemented by the student")
+        self.openai_model = openai_model
+
+        if openai_model:
+            from openai import OpenAI
+            self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        else:
+            self.client = VLLM(model_name)
 
     def generate(self, prompt: str) -> str:
-        # TODO(student): Call the model, obtain text, and ensure the stop token is present.
-        # Return the raw text including the terminal stop token required by the parser.
-        raise NotImplementedError("OpenAIModel.generate must be implemented by the student")
+        if self.openai_model:
+            response = self.client.responses.create(model=self.model_name, tools=[{"type": "web_search_preview"}], input=prompt)
+            
+            # Get the text content and ensure stop token is present
+            text = response.output_text
+        else:
+            text = self.client.generate(prompt, sampling_params=SamplingParams(temperature=0.1))[0].outputs[0].text
+
+        if text and not text.endswith(self.stop_token):
+            text += self.stop_token
+
+        return text

@@ -47,11 +47,29 @@ def process_instance(
         env = SWEEnvironment(instance)
         # Initialize the agent
         agent = ReactAgent("swe-agent", parser, llm)
+        
+        # Add environment functions to the agent
+        agent.add_functions([
+            env.run_bash_cmd, 
+            env.replace_in_file, 
+            env.show_file,
+            env.search_in_file,
+            env.list_files,
+            env.find_file,
+            env.search_in_directory,
+            env.get_file_content,
+            env.set_file_content,
+            env.regex_replace_in_file,
+            env.generate_patch,
+            env.get_file_content,
+            env.set_file_content,
+            env.regex_replace_in_file,
+            env.insert_lines_at,
+            env.delete_lines,
+        ])
+        
         # Run the agent
         output = agent.run(task, max_steps) 
-        
-        # TODO(student): Add more functions here
-        # agent.add_functions([env.run_bash_cmd, env.replace_in_file, env.show_file, ...])
         
         # Generate patch for SWE-Bench
         result = env.generate_patch(output)
@@ -98,7 +116,7 @@ def main(
                 instance_id = futures[future]
                 print(f"Error in future for instance {instance_id}: {e}")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         futures = {
             executor.submit(process_instance, instance, output_path, model_name, max_steps): instance[
                 "instance_id"
