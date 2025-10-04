@@ -1,0 +1,77 @@
+diff --git a/django/core/servers/basehttp.py b/django/core/servers/basehttp.py
+index 14dab517c9..1e5d1fb748 100644
+--- a/django/core/servers/basehttp.py
++++ b/django/core/servers/basehttp.py
+@@ -1,4 +1,4 @@
+-"""
++""" 
+ HTTP server that implements the Python WSGI protocol (PEP 333, rev 1.21).
+ 
+ Based on wsgiref.simple_server which is part of the standard library since 2.5.
+@@ -17,6 +17,7 @@ from django.core.exceptions import ImproperlyConfigured
+ from django.core.handlers.wsgi import LimitedStream
+ from django.core.wsgi import get_wsgi_application
+ from django.utils.module_loading import import_string
++from django.db import close_old_connections
+ 
+ __all__ = ('WSGIServer', 'WSGIRequestHandler')
+ 
+@@ -116,7 +117,10 @@ class ServerHandler(simple_server.ServerHandler):
+     def close(self):
+         self.get_stdin()._read_limited()
+         super().close()
+-
++        # Ensure DB connections are cleaned up at the end of handling the request.
++        # This mirrors the request_finished handling that isn't necessarily
++        # triggered for requests handled by this low-level server in threaded mode.
++        close_old_connections()
+ 
+ class WSGIRequestHandler(simple_server.WSGIRequestHandler):
+     protocol_version = 'HTTP/1.1'
+@@ -196,6 +200,46 @@ class WSGIRequestHandler(simple_server.WSGIRequestHandler):
+         handler.run(self.server.get_app())
+ 
+ 
++def run(addr, port, wsgi_handler, ipv6=False, threading=False, server_cls=WSGIServer):
++    server_address = (addr, port)
++    if threading:
++        httpd_cls = type('WSGIServer', (socketserver.ThreadingMixIn, server_cls), {})
++    else:
++        httpd_cls = server_cls
++    httpd = httpd_cls(server_address, WSGIRequestHandler, ipv6=ipv6)
++    if threading:
++        # ThreadingMixIn.daemon_threads indicates how threads will behave on an
++        # abrupt shutdown; like quitting the server by the user or restarting
++        # by the auto-reloader. True means the server will not wait for thread
++        # termination before it quits. This will make auto-reloader faster
++        # and will prevent the need to kill the server manually if a thread
++        # isn't terminating correctly.
++        httpd.daemon_threads = True
++    httpd.set_app(wsgi_handler)
++    httpd.serve_forever()
++        except (AttributeError, OSError):
++            pass
++
++    def handle_one_request(self):
++        """Copy of WSGIRequestHandler.handle() but with different ServerHandler"""
++        self.raw_requestline = self.rfile.readline(65537)
++        if len(self.raw_requestline) > 65536:
++            self.requestline = ''
++            self.request_version = ''
++            self.command = ''
++            self.send_error(414)
++            return
++
++        if not self.parse_request():  # An error code has been sent, just exit
++            return
++
++        handler = ServerHandler(
++            self.rfile, self.wfile, self.get_stderr(), self.get_environ()
++        )
++        handler.request_handler = self      # backpointer for logging & connection closing
++        handler.run(self.server.get_app())
++
++
+ def run(addr, port, wsgi_handler, ipv6=False, threading=False, server_cls=WSGIServer):
+     server_address = (addr, port)
+     if threading:
