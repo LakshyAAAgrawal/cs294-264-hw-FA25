@@ -1,0 +1,73 @@
+diff --git a/sphinx/domains/cpp.py b/sphinx/domains/cpp.py
+index fe52d881d..078f60044 100644
+--- a/sphinx/domains/cpp.py
++++ b/sphinx/domains/cpp.py
+@@ -4635,15 +4635,7 @@ class DefinitionParser(BaseParser):
+                 self.fail("Unexpected end during inside string.")
+             elif self.current_char == '"' and not escape:
+                 self.pos += 1
+-                break
+-            elif self.current_char == '\\':
+-                escape = True
+-            else:
+-                escape = False
+-            self.pos += 1
+-        return self.definition[startPos:self.pos]
+-
+-    def _parse_literal(self) -> ASTLiteral:
++def _parse_literal(self) -> ASTLiteral:
+         # -> integer-literal
+         #  | character-literal
+         #  | floating-literal
+@@ -4662,17 +4654,51 @@ class DefinitionParser(BaseParser):
+                       integer_literal_re, octal_literal_re]:
+             pos = self.pos
+             if self.match(regex):
++                # remember end of the numeric token before builtin suffixes
++                num_end = self.pos
++                # consume builtin integer/float suffixes like u, l, f, etc.
+                 while self.current_char in 'uUlLfF':
+                     self.pos += 1
++                # user-defined-literal: an identifier immediately following the
++                # literal (no whitespace) - treat as a single literal token
++                old_pos = self.pos
++                if self.match(identifier_re):
++                    # return as a fallback expression so it is preserved
++                    return ASTFallbackExpr(self.definition[pos:self.pos])
++                # no UDL suffix, return regular number literal
+                 return ASTNumberLiteral(self.definition[pos:self.pos])
+ 
+         string = self._parse_string()
+         if string is not None:
++            # string-literal may be followed by a user-defined suffix
++            old_pos = self.pos
++            if self.match(identifier_re):
++                return ASTFallbackExpr(string + self.matched_text)
+             return ASTStringLiteral(string)
+ 
+         # character-literal
+         if self.match(char_literal_re):
+             prefix = self.last_match.group(1)  # may be None when no prefix
++            data = self.last_match.group(2)
++            try:
++                # check for user-defined-literal suffix attached to char literal
++                old_pos = self.pos
++                if self.match(identifier_re):
++                    lit_text = self.last_match.group(0)
++                    # construct the original literal text from the definition
++                    start = self.pos - len(lit_text)
++                    literal_text = self.definition[start:old_pos] + self.matched_text
++                    return ASTFallbackExpr(literal_text)
++
++                return ASTCharLiteral(prefix, data)
++            except UnicodeDecodeError as e:
++                self.fail("Can not handle character literal. Internal error was: %s" % e)
++            except UnsupportedMultiCharacterCharLiteral:
++                self.fail("Can not handle character literal"
++                          " resulting in multiple decoded characters.")
++
++        # TODO: user-defined lit
++        return None
+             data = self.last_match.group(2)
+             try:
+                 return ASTCharLiteral(prefix, data)

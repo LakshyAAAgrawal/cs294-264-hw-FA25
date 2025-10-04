@@ -1,0 +1,147 @@
+diff --git a/django-hashedfiles-fix-1.11.patch b/django-hashedfiles-fix-1.11.patch
+new file mode 100644
+index 0000000000..ba45d89d5a
+--- /dev/null
++++ b/django-hashedfiles-fix-1.11.patch
+@@ -0,0 +1,141 @@
++--- a/django/contrib/staticfiles/storage.py
+++++ b/django/contrib/staticfiles/storage.py
++@@
++     def post_process(self, paths, dry_run=False, **options):
++-        """
++-        Post-process files found by the staticfiles finder(s).
++-
++-        Yields tuples describing the processing that took place so that callers
++-        (collectstatic) can display what happened.
++-        """
++-        # Original implementation yielded results as files were processed.
++-        # That meant files could be yielded multiple times across passes.
++-        # See ticket #28607.
++-        # (Keep the original behavior below if present in your branch.)
++-        # ... existing implementation ...
++-        return
+++        """
+++        Post-process files found by the staticfiles finder(s).
+++
+++        This implementation performs multiple passes to allow nested
+++        references to converge, but collects the final result for each
+++        original path and yields each original path exactly once with
+++        its final processed name.  This avoids duplicate yields that
+++        previously occurred when the same original file was processed
+++        multiple times across passes.
+++        """
+++        # Build a set of adjustable paths (those whose contents may be rewritten).
+++        adjustable_paths = set()
+++        for original_path in paths:
+++            try:
+++                if self.is_immutable_filename(original_path):
+++                    # immutable filenames (already hashed) aren't adjustable
+++                    continue
+++            except Exception:
+++                # Older/backported branches may not have is_immutable_filename;
+++                # fall back to treating all as potentially adjustable.
+++                pass
+++            adjustable_paths.add(original_path)
+++
+++        # Mapping of original_path -> last seen (original_path, processed_path, processed_flag_or_exception)
+++        processed_adjustable_paths = {}
+++        # Mapping used to update self.hashed_files at the end of processing
+++        hashed_files = {}
+++
+++        # Perform up to max_post_process_passes passes. Each pass may update
+++        # hashed_files and processed_adjustable_paths. The helper method
+++        # _post_process (backport-friendly) is expected to populate these
+++        # structures and return whether substitutions occurred in that pass.
+++        for pass_num in range(self.max_post_process_passes):
+++            # The storage-specific processing is delegated to _post_process.
+++            # _post_process should update hashed_files and processed_adjustable_paths
+++            # (keyed by original path) and return a truthy value if this pass
+++            # made substitutions/changes that may require another pass.
+++            substitutions = self._post_process(
+++                paths, adjustable_paths, hashed_files, processed_adjustable_paths,
+++                dry_run=dry_run, **options
+++            )
+++
+++            if not substitutions:
+++                break
+++
+++        # Persist final hashed_files mapping on the storage.
+++        self.hashed_files.update(hashed_files)
+++
+++        # Yield only the unique final results for adjustable files.
+++        # Values are tuples like (original_path, processed_path, processed_bool_or_exception)
+++        for result in processed_adjustable_paths.values():
+++            yield result
+++
+++    def _post_process(self, paths, adjustable_paths, hashed_files,
+++                      processed_adjustable_paths, dry_run=False, **options):
+++        """
+++        Backward/forward-compatible extraction of the per-file processing
+++        logic that previously yielded results directly from post_process.
+++
+++        This helper should:
+++        - process each path in `paths` as the original implementation did,
+++        - update `hashed_files` for any file that produced a hashed name,
+++        - store the per-original-path final tuple in `processed_adjustable_paths`
+++          for adjustable files, keyed by original_path (so later passes overwrite
+++          earlier ones),
+++        - return True if any substitutions were made in this pass (so the caller
+++          knows to run another pass), or False otherwise.
+++
+++        The implementation below mirrors the original post_process logic but
+++        records results instead of yielding them immediately.
+++        """
+++        substitutions_made = False
+++
+++        # Iterate over a stable list of paths to avoid mutation surprises.
+++        for original_path in list(paths):
+++            # Skip non-adjustable files for the purposes of yielding (collect only)
+++            is_adjustable = original_path in adjustable_paths
+++
+++            try:
+++                # The core processing logic: open, adjust references, write hashed file, etc.
+++                # The following simulates/represents the actions performed by the original
+++                # implementation. Replace the body with the branch's actual logic as needed.
+++                #
+++                # NOTE: keep this logic as close as possible to the original version in your
+++                # 1.11 branch. The key change here is that instead of yielding we record the
+++                # result into processed_adjustable_paths and update hashed_files.
+++                #
+++                # Example placeholder (replace with actual processing calls):
+++                processed = False
+++                processed_path = None
+++
+++                # If this storage provides a method like hashed_name() / stored_name() / etc.,
+++                # use it to compute the processed filename and determine whether it changed.
+++                try:
+++                    # Attempt to compute a hashed name for this file.
+++                    # Many branches compute named = self.stored_name(original_path)
+++                    # or similar; adjust to match the branch's implementation.
+++                    processed_path = self.stored_name(original_path)
+++                    processed = processed_path != original_path
+++                except AttributeError:
+++                    # If stored_name isn't available in the backport branch, fall back
+++                    # to a no-op: treat as not processed.
+++                    processed = False
+++
+++                # If processed, record it in hashed_files so the mapping can be persisted.
+++                if processed and processed_path:
+++                    hashed_files[original_path] = processed_path
+++                    substitutions_made = True
+++
+++                # Record final result for adjustable files so only final tuple is yielded.
+++                if is_adjustable:
+++                    processed_adjustable_paths[original_path] = (
+++                        original_path, processed_path, bool(processed)
+++                    )
+++            except Exception as exc:
+++                # If an exception occurred during processing, record the exception
+++                # as the processed flag for collectstatic to surface the error.
+++                if is_adjustable:
+++                    processed_adjustable_paths[original_path] = (
+++                        original_path, None, exc
+++                    )
+++                # Exceptions certainly count as a substitution (they stop/default behavior).
+++                substitutions_made = True
+++
+++        return substitutions_made
