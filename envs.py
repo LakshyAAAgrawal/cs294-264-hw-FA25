@@ -64,6 +64,9 @@ class SWEEnvironment:
         CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
         Read the file first to see the exact indentation, then match it in your content.
         
+        IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+        to see the new line numbers before making any further edits.
+        
         Args:
             file_path (str): path to the file to edit
             from_line (int): starting line number (1-indexed, inclusive) 
@@ -71,7 +74,7 @@ class SWEEnvironment:
             content (str): new content to replace the lines (must preserve exact indentation)
         
         Returns:
-            Success message or error description
+            Success message with new line count, or error description
         """
         try:
             # Read the file
@@ -94,6 +97,13 @@ class SWEEnvironment:
             
             if to_line > len(lines):
                 return f"Error: to_line ({to_line}) exceeds file length ({len(lines)})"
+            
+            # Warn about large replacements (high risk of errors)
+            lines_to_replace = to_line - from_line + 1
+            if lines_to_replace > 30:
+                return f"⚠️  WARNING: Attempting to replace {lines_to_replace} lines at once. This has a high risk of indentation errors.\n" \
+                       f"RECOMMENDATION: Break this into smaller edits (max 20 lines each). Read the file, make a small edit, re-read, repeat.\n" \
+                       f"If you must proceed, ensure indentation is EXACTLY correct by carefully examining the surrounding code."
             
             # Replace lines (convert to 0-indexed)
             # Split content into lines to maintain structure
@@ -150,9 +160,15 @@ class SWEEnvironment:
                 self.env.execute(f"cp {container_temp_path} {file_path}")
                 self.env.execute(f"rm -f {container_temp_path}")
 
+                lines_removed = to_line - from_line + 1
+                lines_added = len(content_lines)
+                net_change = lines_added - lines_removed
+                
                 msg = (
-                    f"Successfully replaced lines {from_line}-{to_line} in {file_path}. "
-                    f"Replaced {to_line-from_line+1} lines with {len(content_lines)} lines."
+                    f"✓ Successfully replaced lines {from_line}-{to_line} in {file_path}. "
+                    f"Replaced {lines_removed} lines with {lines_added} lines (net change: {net_change:+d} lines).\n"
+                    f"⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.\n"
+                    f"The new file has approximately {len(lines) + net_change} total lines."
                 )
                 return self._append_syntax_warning_if_needed(file_path, msg)
             
@@ -195,6 +211,8 @@ class SWEEnvironment:
             return output['output']
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error reading file: {str(e)}"
     
     def search_in_file(self, file_path: str, pattern: str, use_regex: bool = True) -> str:
@@ -216,6 +234,8 @@ class SWEEnvironment:
             output = self.env.execute(cmd)
             return output['output']
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             # grep returns non-zero when no matches found
             return f"No matches found or error: {str(e)}"
     
@@ -234,6 +254,8 @@ class SWEEnvironment:
             output = self.env.execute(cmd)
             return output['output']
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error listing directory: {str(e)}"
     
     def find_file(self, filename: str, directory: str = ".") -> str:
@@ -252,6 +274,8 @@ class SWEEnvironment:
             output = self.env.execute(cmd)
             return output['output']
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error finding files: {str(e)}"
     
     def search_in_directory(self, pattern: str, directory: str = ".", use_regex: bool = True) -> str:
@@ -291,25 +315,67 @@ class SWEEnvironment:
         Overwrite the file with the given content.
         """
         try:
-            import base64
-            encoded = base64.b64encode(content.encode()).decode()
-            cmd = f"echo '{encoded}' | base64 -d > {file_path}"
-            self.env.execute(cmd)
-            msg = f"Successfully wrote to {file_path}"
-            return self._append_syntax_warning_if_needed(file_path, msg)
-        except Exception as e:
-            # Fallback for large content: Write to temp and mv
-            temp_path = "/tmp/temp_content"
+            import tempfile
+            import os
+            
+            # Create temp file on host system
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as host_temp:
+                host_temp.write(content)
+                host_temp_path = host_temp.name
+            
+            container_temp_path = '/tmp/swe_agent_temp_write.txt'
+            
             try:
-                import base64
-                encoded = base64.b64encode(content.encode()).decode()
-                self.env.execute(f"echo '{encoded}' | base64 -d > {temp_path} && mv {temp_path} {file_path}")
-            except Exception:
-                # last resort: write via printf to avoid base64 issues
-                safe = content.replace("'", "'\\''")
-                self.env.execute(f"printf '%s' '{safe}' > {file_path}")
-            msg = f"Successfully wrote to {file_path}"
-            return self._append_syntax_warning_if_needed(file_path, msg)
+                # Use stdin piping to transfer file into container
+                container_id = getattr(self.env, 'container_id', None)
+                if not container_id:
+                    raise ValueError("Container ID not available - this method requires DockerEnvironment")
+                
+                docker_executable = getattr(self.env.config, 'executable', 'docker')
+                
+                # Use docker exec with stdin to pipe content into container
+                with open(host_temp_path, 'rb') as f:
+                    file_content = f.read()
+                
+                # Use docker exec with stdin to write the file
+                write_cmd = [
+                    docker_executable, 'exec', '-i', container_id,
+                    'bash', '-c', f'cat > {container_temp_path}'
+                ]
+                result = subprocess.run(
+                    write_cmd,
+                    input=file_content,
+                    capture_output=True,
+                    timeout=300  # 5 minute timeout for large files
+                )
+                
+                if result.returncode != 0:
+                    file_size = os.path.getsize(host_temp_path)
+                    error_msg = f"Failed to write file to container. File size: {file_size} bytes. "
+                    if result.stderr:
+                        error_msg += f"Error: {result.stderr.decode('utf-8', errors='replace')}"
+                    if result.stdout:
+                        error_msg += f" Output: {result.stdout.decode('utf-8', errors='replace')}"
+                    raise RuntimeError(error_msg)
+                
+                # Move temp file to target location in container
+                self.env.execute(f"cp {container_temp_path} {file_path}")
+                self.env.execute(f"rm -f {container_temp_path}")
+                
+                msg = f"Successfully wrote to {file_path}"
+                return self._append_syntax_warning_if_needed(file_path, msg)
+            
+            finally:
+                # Always clean up host temp file
+                try:
+                    os.unlink(host_temp_path)
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"Error in set_file_content: {str(e)}"
 
     def regex_replace_in_file(self, file_path: str, pattern: str, replacement: str, use_regex: bool = True) -> str:
         """
@@ -324,6 +390,8 @@ class SWEEnvironment:
             msg = f"Successfully replaced in {file_path}"
             return self._append_syntax_warning_if_needed(file_path, msg)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error: {str(e)}"
 
     def replace_between(self, file_path: str, start_pattern: str, end_pattern: str, content: str,
@@ -353,8 +421,16 @@ class SWEEnvironment:
             import re
             def find_index(pattern: str, start: int = 0) -> int:
                 if use_regex:
+                    try:
+                        compiled_pattern = re.compile(pattern)
+                    except re.error as e:
+                        raise ValueError(
+                            f"Invalid regex pattern: {e}. "
+                            f"If you want literal string matching, set use_regex=False (the default). "
+                            f"If you want regex, escape special characters properly."
+                        )
                     for idx in range(start, len(lines)):
-                        if re.search(pattern, lines[idx]):
+                        if compiled_pattern.search(lines[idx]):
                             return idx
                     return -1
                 else:
@@ -395,31 +471,68 @@ class SWEEnvironment:
         Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
         """
         try:
-            if match_indentation:
+            # Validate and convert line_num to int
+            try:
+                line_num = int(line_num)
+            except (ValueError, TypeError):
+                return f"Error: Invalid line_num. line_num={line_num}. It must be a valid integer."
+            
+            if line_num < 1:
+                return f"Error: line_num must be >= 1, got {line_num}"
+            
+            # Read the file
+            read_output_d = self.env.execute(f"cat {file_path}")
+            file_content = read_output_d['output']
+            lines = file_content.split('\n')
+            
+            if match_indentation and line_num > 1:
                 # Get prev line to detect indent
-                prev_result = self.env.execute(f"sed -n '{line_num-1}p' {file_path}")
-                prev = prev_result['output'] if isinstance(prev_result, dict) else str(prev_result)
+                prev = lines[line_num - 2] if line_num - 2 < len(lines) else ""
                 indent = len(prev) - len(prev.lstrip())
                 content = '\n'.join(' ' * indent + l for l in content.split('\n'))
-            import base64
-            encoded = base64.b64encode(content.encode()).decode()
-            cmd = f"sed -i '{line_num}i $(echo '{encoded}' | base64 -d)' {file_path}"
-            self.env.execute(cmd)
+            
+            # Insert content at specified line
+            content_lines = content.split('\n')
+            new_lines = lines[:line_num-1] + content_lines + lines[line_num-1:]
+            new_content = '\n'.join(new_lines)
+            
+            # Write back using set_file_content (which handles large files)
+            result = self.set_file_content(file_path, new_content)
+            if result.startswith("Error"):
+                return result
+            
             msg = f"Successfully inserted content at line {line_num} in {file_path}"
             return self._append_syntax_warning_if_needed(file_path, msg)
         except Exception as e:
-            return f"Error: {str(e)}"
+            import traceback
+            traceback.print_exc()
+            return f"Error in insert_lines_at: {str(e)}"
 
     def delete_lines(self, file_path: str, from_line: int, to_line: int) -> str:
         """
         Delete lines from from_line to to_line (1-indexed, inclusive).
         """
         try:
+            # Validate and convert line numbers to int
+            try:
+                from_line = int(from_line)
+            except (ValueError, TypeError):
+                return f"Error: Invalid from_line. from_line={from_line}. It must be a valid integer."
+            try:
+                to_line = int(to_line)
+            except (ValueError, TypeError):
+                return f"Error: Invalid to_line. to_line={to_line}. It must be a valid integer."
+            
+            if from_line < 1 or to_line < 1 or from_line > to_line:
+                return f"Error: Invalid line numbers. from_line={from_line}, to_line={to_line}"
+            
             cmd = f"sed -i '{from_line},{to_line}d' {file_path}"
             self.env.execute(cmd)
             msg = f"Successfully deleted lines {from_line}-{to_line} in {file_path}"
             return self._append_syntax_warning_if_needed(file_path, msg)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error: {str(e)}"
 
     def run_python_snippet(self, code: str) -> str:
@@ -428,12 +541,62 @@ class SWEEnvironment:
         Useful for testing or complex file operations.
         """
         try:
-            import base64
-            encoded = base64.b64encode(code.encode()).decode()
-            cmd = f"python3 -c \"$(echo '{encoded}' | base64 -d)\""
-            return self.env.execute(cmd)['output']
+            import tempfile
+            import os
+            
+            # Create temp file on host system
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.py', encoding='utf-8') as host_temp:
+                host_temp.write(code)
+                host_temp_path = host_temp.name
+            
+            container_temp_path = '/tmp/swe_agent_temp_snippet.py'
+            
+            try:
+                # Use stdin piping to transfer file into container
+                container_id = getattr(self.env, 'container_id', None)
+                if not container_id:
+                    raise ValueError("Container ID not available - this method requires DockerEnvironment")
+                
+                docker_executable = getattr(self.env.config, 'executable', 'docker')
+                
+                # Use docker exec with stdin to pipe content into container
+                with open(host_temp_path, 'rb') as f:
+                    file_content = f.read()
+                
+                # Use docker exec with stdin to write the file
+                write_cmd = [
+                    docker_executable, 'exec', '-i', container_id,
+                    'bash', '-c', f'cat > {container_temp_path}'
+                ]
+                result = subprocess.run(
+                    write_cmd,
+                    input=file_content,
+                    capture_output=True,
+                    timeout=60
+                )
+                
+                if result.returncode != 0:
+                    error_msg = "Failed to write Python snippet to container. "
+                    if result.stderr:
+                        error_msg += f"Error: {result.stderr.decode('utf-8', errors='replace')}"
+                    raise RuntimeError(error_msg)
+                
+                # Execute the Python file and clean up
+                output = self.env.execute(f"python3 {container_temp_path}")
+                self.env.execute(f"rm -f {container_temp_path}")
+                return output['output']
+            
+            finally:
+                # Always clean up host temp file
+                try:
+                    os.unlink(host_temp_path)
+                except Exception:
+                    pass
+                    
         except Exception as e:
-            return f"Error: {str(e)}"
+            import traceback
+            traceback.print_exc()
+            return f"Error in run_python_snippet: {str(e)}"
     
     def run_tests(self, test_cmd: "str | None" = None) -> str:
         """
@@ -470,6 +633,8 @@ class SWEEnvironment:
             result = self.env.execute(f"timeout 120 {test_cmd}")
             return result['output']
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Test execution error: {str(e)}"
 
     def detect_indentation(self, file_path: str) -> str:
@@ -477,7 +642,9 @@ class SWEEnvironment:
         Return indentation info (e.g., '4 spaces' or 'tabs').
         """
         try:
-            content = self.get_file_content(file_path)
+            # Read file content
+            result = self.env.execute(f"cat {file_path}")
+            content = result['output']
             for line in content.split('\n'):
                 if line.startswith(' '):
                     return f"{len(line) - len(line.lstrip())} spaces"
@@ -485,6 +652,8 @@ class SWEEnvironment:
                     return "tabs"
             return "No indentation detected"
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error: {str(e)}"
     
     def git_diff(self) -> str:
@@ -503,7 +672,70 @@ class SWEEnvironment:
                 return "No changes yet. You have not modified any files. Make code changes before calling finish()!"
             return diff_output
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error getting git diff: {str(e)}"
+    
+    def find_and_replace_text(self, file_path: str, old_text: str, new_text: str, count: int = 1) -> str:
+        """
+        Find and replace exact text in a file (simpler and safer than line-number-based replacement).
+        This tool is useful for small, precise changes where you know the exact text to replace.
+        
+        Advantages over replace_in_file:
+        - No line numbers needed (no stale line number issues)
+        - Automatically preserves surrounding code
+        - Safer for small, targeted changes
+        - Less prone to indentation errors
+        
+        Args:
+            file_path (str): path to the file to edit
+            old_text (str): exact text to find and replace (must match exactly, including whitespace)
+            new_text (str): text to replace it with
+            count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+        
+        Returns:
+            Success message or error if text not found
+        """
+        try:
+            # Validate and convert count to int
+            try:
+                count = int(count)
+            except (ValueError, TypeError):
+                return f"Error: Invalid count. count={count}. It must be a valid integer."
+            
+            # Read the file
+            read_output_d = self.env.execute(f"cat {file_path}")
+            file_content = read_output_d['output']
+            
+            # Count occurrences
+            occurrences = file_content.count(old_text)
+            if occurrences == 0:
+                return f"Error: Text not found in {file_path}. Make sure old_text matches EXACTLY (including all whitespace, indentation, and newlines)."
+            
+            # Perform replacement
+            if count == -1:
+                new_content = file_content.replace(old_text, new_text)
+                replaced_count = occurrences
+            else:
+                new_content = file_content.replace(old_text, new_text, count)
+                replaced_count = min(count, occurrences)
+            
+            # Write the file back using set_file_content (which handles encoding properly)
+            write_result = self.set_file_content(file_path, new_content)
+            
+            msg = (
+                f"✓ Successfully replaced {replaced_count} occurrence(s) in {file_path}.\n"
+                f"Found {occurrences} total occurrence(s) of the text.\n"
+                f"TIP: Call show_file to verify the change was correct."
+            )
+            
+            # For Python files, append syntax check
+            return self._append_syntax_warning_if_needed(file_path, msg)
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"Error in find_and_replace_text: {str(e)}"
     
     def check_syntax(self, file_path: str) -> str:
         """
@@ -518,21 +750,35 @@ class SWEEnvironment:
         """
         try:
             # Try to compile the file to check syntax
-            result = self.env.execute(f"python3 -m py_compile {file_path}")
-            if result['exit_code'] == 0:
-                return f"✓ {file_path} has valid Python syntax"
-            else:
-                return f"✗ Syntax error in {file_path}:\n{result['output']}"
+            # Note: execute() raises an exception on non-zero exit codes
+            result = self.env.execute(f"python3 -m py_compile {file_path} 2>&1")
+            # If we get here, the command succeeded (no syntax errors)
+            return f"✓ {file_path} has valid Python syntax"
         except Exception as e:
-            # If py_compile fails, try basic import check
+            import traceback
+            traceback.print_exc()
+            # The exception likely contains the syntax error details
+            error_msg = str(e)
+            
+            # Check if this is a syntax error (SyntaxError, IndentationError, etc.)
+            if any(keyword in error_msg for keyword in ['SyntaxError', 'IndentationError', 'TabError', 'unexpected indent']):
+                return f"✗ Syntax error in {file_path}:\n{error_msg}"
+            
+            # Try alternative check with ast.parse as fallback
             try:
-                result = self.env.execute(f"python3 -c 'import ast; ast.parse(open(\"{file_path}\").read())'")
-                if result['exit_code'] == 0:
-                    return f"✓ {file_path} has valid Python syntax"
-                else:
-                    return f"✗ Syntax error in {file_path}:\n{result['output']}"
+                result = self.env.execute(f"python3 -c 'import ast; ast.parse(open(\"{file_path}\").read())' 2>&1")
+                # Success - no syntax errors
+                return f"✓ {file_path} has valid Python syntax"
             except Exception as e2:
-                return f"Could not check syntax: {str(e)}"
+                import traceback
+                traceback.print_exc()
+                # Check if this exception contains syntax error info
+                error_msg2 = str(e2)
+                if any(keyword in error_msg2 for keyword in ['SyntaxError', 'IndentationError', 'TabError', 'unexpected indent']):
+                    return f"✗ Syntax error in {file_path}:\n{error_msg2}"
+                
+                # Neither method worked - return original error
+                return f"✗ Syntax error in {file_path}:\n{error_msg}"
 
     def list_modified_python_files(self) -> str:
         """
@@ -542,6 +788,8 @@ class SWEEnvironment:
             out = self.env.execute("git diff --name-only -- '*.py'")
             return out['output'] or ""
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error listing modified files: {str(e)}"
 
     def check_repo_syntax(self) -> str:
@@ -558,13 +806,16 @@ class SWEEnvironment:
                 return "No Python files to check."
             errors = []
             for f in files:
-                res = self.env.execute(f"python3 -m py_compile {f}")
-                if res['exit_code'] != 0:
-                    errors.append(f"{f}:\n{res['output']}")
+                # Use check_syntax which properly handles exceptions
+                syntax_result = self.check_syntax(f)
+                if syntax_result.strip().startswith('✗') or 'Syntax error' in syntax_result:
+                    errors.append(f"{f}:\n{syntax_result}")
             if errors:
                 return "✗ Syntax errors detected:\n\n" + "\n\n".join(errors)
             return "✓ All checked Python files have valid syntax"
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error during repository syntax check: {str(e)}"
 
     def git_apply(self, patch: str) -> str:
@@ -574,37 +825,91 @@ class SWEEnvironment:
         Returns success or stderr on failure.
         """
         try:
-            import base64
-            encoded = base64.b64encode(patch.encode()).decode()
-            result = self.env.execute("bash -lc \"base64 -d <<< '%s' | git apply -p0 -v -\"" % encoded)
-            if result.get('exit_code', 0) == 0:
-                # After applying a patch, check syntax of modified Python files
-                try:
-                    files_out = self.env.execute("git diff --name-only -- '*.py'")
-                    files = [f.strip() for f in files_out.get('output', '').split('\n') if f.strip()]
-                except Exception:
-                    files = []
-                warnings = []
-                for f in files:
+            import tempfile
+            import os
+            
+            # Create temp file on host system
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.patch', encoding='utf-8') as host_temp:
+                host_temp.write(patch)
+                host_temp_path = host_temp.name
+            
+            container_temp_path = '/tmp/swe_agent_temp_patch.patch'
+            
+            try:
+                # Use stdin piping to transfer file into container
+                container_id = getattr(self.env, 'container_id', None)
+                if not container_id:
+                    raise ValueError("Container ID not available - this method requires DockerEnvironment")
+                
+                docker_executable = getattr(self.env.config, 'executable', 'docker')
+                
+                # Use docker exec with stdin to pipe content into container
+                with open(host_temp_path, 'rb') as f:
+                    file_content = f.read()
+                
+                # Use docker exec with stdin to write the file
+                write_cmd = [
+                    docker_executable, 'exec', '-i', container_id,
+                    'bash', '-c', f'cat > {container_temp_path}'
+                ]
+                result = subprocess.run(
+                    write_cmd,
+                    input=file_content,
+                    capture_output=True,
+                    timeout=60
+                )
+                
+                if result.returncode != 0:
+                    error_msg = "Failed to write patch to container. "
+                    if result.stderr:
+                        error_msg += f"Error: {result.stderr.decode('utf-8', errors='replace')}"
+                    raise RuntimeError(error_msg)
+                
+                # Apply the patch and clean up
+                apply_result = self.env.execute(f"git apply -p0 -v {container_temp_path}")
+                self.env.execute(f"rm -f {container_temp_path}")
+                
+                if apply_result.get('exit_code', 0) == 0:
+                    # After applying a patch, check syntax of modified Python files
                     try:
-                        syntax = self.check_syntax(f)
-                        if syntax.strip().startswith('✗') or 'Syntax error' in syntax:
-                            warnings.append(f"{f}:\n{syntax}")
+                        files_out = self.env.execute("git diff --name-only -- '*.py'")
+                        files = [f.strip() for f in files_out.get('output', '').split('\n') if f.strip()]
                     except Exception:
-                        continue
-                if warnings:
-                    return "Patch applied successfully\n\nWarnings (syntax errors detected):\n\n" + "\n\n".join(warnings)
-                return "Patch applied successfully"
-            return result.get('output', 'git apply returned a non-zero exit code')
+                        files = []
+                    warnings = []
+                    for f in files:
+                        try:
+                            syntax = self.check_syntax(f)
+                            if syntax.strip().startswith('✗') or 'Syntax error' in syntax:
+                                warnings.append(f"{f}:\n{syntax}")
+                        except Exception:
+                            import traceback
+                            traceback.print_exc()
+                            continue
+                    if warnings:
+                        return "Patch applied successfully\n\nWarnings (syntax errors detected):\n\n" + "\n\n".join(warnings)
+                    return "Patch applied successfully"
+                return apply_result.get('output', 'git apply returned a non-zero exit code')
+            
+            finally:
+                # Always clean up host temp file
+                try:
+                    os.unlink(host_temp_path)
+                except Exception:
+                    pass
+                    
         except Exception as e:
-            return f"Error applying patch: {str(e)}"
+            import traceback
+            traceback.print_exc()
+            return f"Error in git_apply: {str(e)}"
 
     def _append_syntax_warning_if_needed(self, file_path: str, base_message: str) -> str:
         """
         Append a small warning with syntax errors for Python files, if any.
 
         This runs a quick syntax check for `.py` files and, when errors are
-        detected, appends a concise warning that includes the actual error.
+        detected (including IndentationError, SyntaxError, etc.), appends a 
+        concise warning that includes the actual error.
         """
         try:
             if isinstance(file_path, str) and file_path.endswith('.py'):
@@ -612,6 +917,8 @@ class SWEEnvironment:
                 if isinstance(syntax, str) and (syntax.strip().startswith('✗') or 'Syntax error' in syntax):
                     return f"{base_message}\n\nWarning: syntax errors detected in {file_path}:\n{syntax}"
         except Exception:
+            import traceback
+            traceback.print_exc()
             # Do not block main operation on warning generation
             pass
         return base_message

@@ -82,6 +82,8 @@ def process_instance(
             env.list_files,
             env.find_file,
             env.replace_in_file,
+            # env.set_file_content,           # ← For complete file rewrites
+            env.replace_between,            # ← For pattern-based editing (more robust)
             env.insert_lines_at,
             env.delete_lines,
             env.git_diff,
@@ -92,6 +94,7 @@ def process_instance(
             env.run_python_snippet,
             env.detect_indentation,
             env.list_modified_python_files,
+            env.find_and_replace_text
         ])
 
         # Run the agent

@@ -64,7 +64,8 @@ Recommended workflow:
    - Use show_file to inspect only the necessary lines (prefer ranges)
    - Confirm indentation style (tabs vs spaces) and surrounding context
 3) Edit
-   - Use replace_in_file for small, targeted changes
+   - For small, precise text changes: Use find_and_replace_text (safer, no line numbers)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
    - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
    - Repeat for additional edits (always re-read after each edit)
 4) Test/Verify
@@ -74,19 +75,29 @@ Recommended workflow:
    - If the diff is correct, finish() with a brief summary of the fix
 
 Key rules for safe editing:
-- Always read the file before editing
-- After any replace_in_file, re-read the file (line numbers change)
-- Match indentation exactly:
-  - Use real tabs/spaces as present in the file (do not write literal \t or \n)
-  - Do not mix tabs and spaces
-- Make minimal changes; avoid unnecessary refactors
-- Line numbers are 1-indexed and inclusive (from_line and to_line are both included)
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+INDENTATION RULES (CRITICAL FOR SUCCESS):
+- BEFORE editing: Call detect_indentation(file_path) to see if file uses tabs or spaces
+- Read the exact lines you'll replace - note the indentation level precisely
+- Match indentation EXACTLY - count spaces/tabs character-by-character
+- For Python files: After EVERY edit, call check_syntax(file_path) to catch indentation errors
+- If syntax check fails, immediately fix and re-check before proceeding
+- Common mistake: Copying indentation from system prompt examples instead of from the actual file
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
 - from_line and to_line must be integers
-- Keep content small and focused:
-  - Prefer small edits (<100 lines)
-  - For larger transformations, consider a scripted approach via run_bash_cmd
+- Make minimal changes; avoid unnecessary refactors
 - Make decisions autonomously; do not ask the user for choices or input
-- Before finishing, verify that git_diff shows changes; if not, adjust and try again
 
 Efficiency tips:
 - Aim for 5–15 steps for most tasks
@@ -94,14 +105,19 @@ Efficiency tips:
 - If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
 - Finish as soon as the fix is applied and verified
 
-Common pitfalls to avoid:
+Common pitfalls to avoid (LEARN FROM THESE):
 - Missing or malformed function call markers
 - Text after ----END_FUNCTION_CALL----
 - Multiple function calls in one response
-- Stale line numbers (not re-reading after edits)
-- Indentation mismatches (tabs vs spaces)
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
 - Finishing without making actual changes
+- Finishing without calling git_diff to verify changes
 - Asking the user for input or choices
+- Not calling check_syntax after editing Python files
 
 Search strategies:
 - Start broad with search_in_directory; narrow with search_in_file
@@ -113,11 +129,18 @@ Bash best practices:
 - Prefer replace_in_file for small, precise changes
 - For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
 
-How to finish:
-- Use git_diff to verify changes were applied
-- Then call finish("Brief summary of what changed and why")
-- Ensure that you have made code changes, verified by git_diff, before calling finish
-- Do not finish if no changes were made
+How to finish (MANDATORY CHECKLIST):
+Before calling finish(), complete ALL of these steps:
+1. Run git_diff() and carefully review the changes
+2. For Python files: Run check_repo_syntax() to verify no syntax/indentation errors
+3. Verify the diff matches the task requirements:
+   - Check for correct indentation (no misaligned code)
+   - Check for NO deleted imports or critical code
+   - Check for NO duplicate functions or methods
+   - Check that only relevant code was modified
+4. If issues found in diff: Fix them immediately, don't call finish()
+5. Only call finish() when the diff is clean and correct
+6. Do not finish if no changes were made or if changes are incorrect
 
 Correct format examples:
 
@@ -409,9 +432,17 @@ Try a different action now. Simplify your approach."""
 CRITICAL FIX:
 1. Stop repeating the same approach
 2. Try a COMPLETELY different action
-3. If stuck on one file, try searching for a different file
-4. If editing fails, try reading first
-5. Simplify your approach - use basic actions only
+3. If stuck on editing, try this sequence:
+   a) Read the file section you want to edit
+   b) Note the EXACT indentation (count spaces/tabs)
+   c) Make a SMALL edit (max 10-15 lines)
+   d) Immediately re-read to verify
+   e) If syntax error, fix immediately
+4. Common mistakes to avoid:
+   - Using stale line numbers (re-read after each edit!)
+   - Wrong indentation (match existing code exactly!)
+   - Replacing too many lines at once (break into smaller edits!)
+   - Deleting imports or critical code
 
 Recent error pattern: {error_types[-3:]}
 
@@ -527,6 +558,8 @@ Take a different approach now. Make a simple, safe action."""
                             try:
                                 syntax_report = repo_syntax_checker()
                             except Exception as e:
+                                import traceback
+                                traceback.print_exc()
                                 syntax_report = None
                             # Expect formats from envs.SWEEnvironment.check_repo_syntax
                             if isinstance(syntax_report, str) and (syntax_report.strip().startswith("✗") or "Syntax errors detected" in syntax_report):

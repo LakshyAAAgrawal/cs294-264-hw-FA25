@@ -67,7 +67,8 @@ arg2_value (can be multiline)
                     raise ValueError(f"Argument {i} is malformed: missing argument name")
                 
                 arg_name = arg_lines[0].strip()
-                arg_value = arg_lines[1].strip() if len(arg_lines) > 1 else ""
+                # Only strip trailing whitespace to preserve leading indentation in code content
+                arg_value = arg_lines[1].rstrip() if len(arg_lines) > 1 else ""
                 arguments[arg_name] = arg_value
             
             return {
