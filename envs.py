@@ -101,25 +101,63 @@ class SWEEnvironment:
             new_lines = lines[:from_line-1] + content_lines + lines[to_line:]
             new_content = '\n'.join(new_lines)
             
-            # Write to temporary file first to avoid argument list too long errors
+            # Write to temporary file on HOST to avoid argument list too long errors
             import tempfile
             import os
-            temp_file = '/tmp/swe_agent_temp_edit.txt'
             
-            # Write content to temp file using Python (more reliable for large files)
-            write_cmd = f"""python3 -c "
-import sys
-content = {repr(new_content)}
-with open('{temp_file}', 'w') as f:
-    f.write(content)
-" """
-            self.env.execute(write_cmd)
+            # Create temp file on host system
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as host_temp:
+                host_temp.write(new_content)
+                host_temp_path = host_temp.name
             
-            # Copy temp file to target
-            self.env.execute(f"cp {temp_file} {file_path}")
-            self.env.execute(f"rm {temp_file}")
+            container_temp_path = '/tmp/swe_agent_temp_edit.txt'
             
-            return f"Successfully replaced lines {from_line}-{to_line} in {file_path}. Replaced {to_line-from_line+1} lines with {len(content_lines)} lines."
+            try:
+                # Use stdin piping to transfer file into container (avoids command-line size limits and docker cp permission issues)
+                container_id = getattr(self.env, 'container_id', None)
+                if not container_id:
+                    raise ValueError("Container ID not available - this method requires DockerEnvironment")
+                
+                docker_executable = getattr(self.env.config, 'executable', 'docker')
+                
+                # Use docker exec with stdin to pipe content into container
+                # This avoids docker cp UID/GID issues and works with any file size
+                with open(host_temp_path, 'rb') as f:
+                    file_content = f.read()
+                
+                # Use docker exec with stdin to write the file
+                write_cmd = [
+                    docker_executable, 'exec', '-i', container_id,
+                    'bash', '-c', f'cat > {container_temp_path}'
+                ]
+                result = subprocess.run(
+                    write_cmd,
+                    input=file_content,
+                    capture_output=True,
+                    timeout=300  # 5 minute timeout for large files
+                )
+                
+                if result.returncode != 0:
+                    file_size = os.path.getsize(host_temp_path)
+                    error_msg = f"Failed to write file to container. File size: {file_size} bytes. "
+                    if result.stderr:
+                        error_msg += f"Error: {result.stderr.decode('utf-8', errors='replace')}"
+                    if result.stdout:
+                        error_msg += f" Output: {result.stdout.decode('utf-8', errors='replace')}"
+                    raise RuntimeError(error_msg)
+                
+                # Move temp file to target location in container
+                self.env.execute(f"cp {container_temp_path} {file_path}")
+                self.env.execute(f"rm -f {container_temp_path}")
+                
+                return f"Successfully replaced lines {from_line}-{to_line} in {file_path}. Replaced {to_line-from_line+1} lines with {len(content_lines)} lines."
+            
+            finally:
+                # Always clean up host temp file
+                try:
+                    os.unlink(host_temp_path)
+                except Exception:
+                    pass
             
         except Exception as e:
             import traceback
