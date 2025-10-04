@@ -1,0 +1,2146 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+CRITICAL: Before deleting lines, verify they don't contain variable definitions, imports, or function/class definitions that are used elsewhere. Deleting such lines causes runtime errors even if syntax is valid.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Checks for critical semantic errors (undefined names, etc.)
+5. Shows git diff preview of all changes
+6. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+Migration import ordering violates coding style and isort defaults
+Description
+	
+New migration files are generated with imports sorted by module, independent of import style. For example:
+import datetime
+from django.db import migrations, models
+import time
+The ​Django coding style specifies:
+Place all import module statements before from module import objects in each section.
+This guidance is the same as what isort does by default, ​as documented here. Newly generated migrations can fail isort for this reason.
+This would mean migration files should instead be generated like this:
+import datetime
+import time
+from django.db import migrations, models
+For reference, previous issues related to migration import sorting: #24155, #25384.
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll list the repository root to find the migration-generation code and related files to inspect where import ordering is produced.  
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+total 192
+drwxrwxrwx   1 root root  4096 Sep 10 13:36 .
+drwxr-xr-x   1 root root  4096 Oct  4 22:30 ..
+-rw-r--r--   1 root root   806 Sep 10 13:28 .editorconfig
+-rw-r--r--   1 root root   148 Sep 10 13:28 .eslintignore
+-rw-r--r--   1 root root  1407 Sep 10 13:28 .eslintrc
+drwxrwxrwx   8 root root  4096 Sep 10 13:36 .git
+-rw-r--r--   1 root root   369 Sep 10 13:28 .git-blame-ignore-revs
+-rw-r--r--   1 root root   297 Sep 10 13:28 .gitattributes
+drwxrwxrwx   3 root root  4096 Sep 10 13:28 .github
+-rw-r--r--   1 root root   353 Sep 10 13:28 .gitignore
+-rw-r--r--   1 root root   551 Sep 10 13:28 .pre-commit-config.yaml
+-rw-r--r--   1 root root   385 Sep 10 13:28 .readthedocs.yml
+drwxrwxrwx   2 root root  4096 Sep 10 13:28 .tx
+-rw-r--r--   1 root root 41332 Sep 10 13:28 AUTHORS
+-rw-r--r--   1 root root  1115 Sep 10 13:28 CONTRIBUTING.rst
+drwxr-xr-x   2 root root  4096 Sep 10 13:36 Django.egg-info
+-rw-r--r--   1 root root   369 Sep 10 13:28 Gruntfile.js
+-rw-r--r--   1 root root   237 Sep 10 13:28 INSTALL
+-rw-r--r--   1 root root  1552 Sep 10 13:28 LICENSE
+-rw-r--r--   1 root root 14383 Sep 10 13:28 LICENSE.python
+-rw-r--r--   1 root root   292 Sep 10 13:28 MANIFEST.in
+-rw-r--r--   1 root root  2122 Sep 10 13:28 README.rst
+drwxrwxrwx  18 root root  4096 Sep 10 13:36 django
+drwxrwxrwx  13 root root  4096 Sep 10 13:28 docs
+drwxrwxrwx   2 root root  4096 Sep 10 13:28 extras
+drwxrwxrwx   4 root root  4096 Sep 10 13:28 js_tests
+-rw-r--r--   1 root root   356 Sep 10 13:28 package.json
+-rw-r--r--   1 root root   199 Sep 10 13:28 pyproject.toml
+drwxrwxrwx   2 root root  4096 Sep 10 13:28 scripts
+-rw-r--r--   1 root root  2191 Sep 10 13:28 setup.cfg
+-rw-r--r--   1 root root  1633 Sep 10 13:28 setup.py
+drwxrwxrwx 214 root root 12288 Sep 10 13:28 tests
+-rw-r--r--   1 root root  1875 Sep 10 13:28 tox.ini
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll search the codebase for MigrationWriter to locate where migration files and their imports are rendered so I can inspect and modify the import ordering logic.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+MigrationWriter
+----ARG----
+directory
+django
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+django/core/management/commands/makemigrations.py:23:from django.db.migrations.writer import MigrationWriter
+django/core/management/commands/makemigrations.py:318:            previous_migration_path = MigrationWriter(leaf_migration).path
+django/core/management/commands/makemigrations.py:343:                writer = MigrationWriter(migration, self.include_header)
+django/core/management/commands/makemigrations.py:494:                writer = MigrationWriter(new_migration, self.include_header)
+django/core/management/commands/optimizemigration.py:11:from django.db.migrations.writer import MigrationWriter
+django/core/management/commands/optimizemigration.py:82:        writer = MigrationWriter(migration)
+django/core/management/commands/optimizemigration.py:104:            writer = MigrationWriter(optimized_migration)
+django/core/management/commands/squashmigrations.py:12:from django.db.migrations.writer import MigrationWriter
+django/core/management/commands/squashmigrations.py:217:        writer = MigrationWriter(new_migration, include_header)
+django/contrib/postgres/apps.py:6:from django.db.migrations.writer import MigrationWriter
+django/contrib/postgres/apps.py:49:        MigrationWriter.unregister_serializer(RANGE_TYPES)
+django/contrib/postgres/apps.py:83:        MigrationWriter.register_serializer(RANGE_TYPES, RangeSerializer)
+django/db/migrations/writer.py:33:                        key_string, key_imports = MigrationWriter.serialize(key)
+django/db/migrations/writer.py:34:                        arg_string, arg_imports = MigrationWriter.serialize(value)
+django/db/migrations/writer.py:51:                        arg_string, arg_imports = MigrationWriter.serialize(item)
+django/db/migrations/writer.py:63:                arg_string, arg_imports = MigrationWriter.serialize(_arg_value)
+django/db/migrations/writer.py:118:class MigrationWriter:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll open django/db/migrations/writer.py to inspect MigrationWriter and locate the import rendering logic that controls migration import ordering.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+     1  import os
+     2  import re
+     3  from importlib import import_module
+        
+     4  from django import get_version
+     5  from django.apps import apps
+        
+     6  # SettingsReference imported for backwards compatibility in Django 2.2.
+     7  from django.conf import SettingsReference  # NOQA
+     8  from django.db import migrations
+     9  from django.db.migrations.loader import MigrationLoader
+    10  from django.db.migrations.serializer import Serializer, serializer_factory
+    11  from django.utils.inspect import get_func_args
+    12  from django.utils.module_loading import module_dir
+    13  from django.utils.timezone import now
+        
+        
+    14  class OperationWriter:
+    15      def __init__(self, operation, indentation=2):
+    16          self.operation = operation
+    17          self.buff = []
+    18          self.indentation = indentation
+        
+    19      def serialize(self):
+    20          def _write(_arg_name, _arg_value):
+    21              if _arg_name in self.operation.serialization_expand_args and isinstance(
+    22                  _arg_value, (list, tuple, dict)
+    23              ):
+    24                  if isinstance(_arg_value, dict):
+    25                      self.feed("%s={" % _arg_name)
+    26                      self.indent()
+    27                      for key, value in _arg_value.items():
+    28                          key_string, key_imports = MigrationWriter.serialize(key)
+    29                          arg_string, arg_imports = MigrationWriter.serialize(value)
+    30                          args = arg_string.splitlines()
+    31                          if len(args) > 1:
+    32                              self.feed("%s: %s" % (key_string, args[0]))
+    33                              for arg in args[1:-1]:
+    34                                  self.feed(arg)
+    35                              self.feed("%s," % args[-1])
+    36                          else:
+    37                              self.feed("%s: %s," % (key_string, arg_string))
+    38                          imports.update(key_imports)
+    39                          imports.update(arg_imports)
+    40                      self.unindent()
+    41                      self.feed("},")
+    42                  else:
+    43                      self.feed("%s=[" % _arg_name)
+    44                      self.indent()
+    45                      for item in _arg_value:
+    46                          arg_string, arg_imports = MigrationWriter.serialize(item)
+    47                          args = arg_string.splitlines()
+    48                          if len(args) > 1:
+    49                              for arg in args[:-1]:
+    50                                  self.feed(arg)
+    51                              self.feed("%s," % args[-1])
+    52                          else:
+    53                              self.feed("%s," % arg_string)
+    54                          imports.update(arg_imports)
+    55                      self.unindent()
+    56                      self.feed("],")
+    57              else:
+    58                  arg_string, arg_imports = MigrationWriter.serialize(_arg_value)
+    59                  args = arg_string.splitlines()
+    60                  if len(args) > 1:
+    61                      self.feed("%s=%s" % (_arg_name, args[0]))
+    62                      for arg in args[1:-1]:
+    63                          self.feed(arg)
+    64                      self.feed("%s," % args[-1])
+    65                  else:
+    66                      self.feed("%s=%s," % (_arg_name, arg_string))
+    67                  imports.update(arg_imports)
+        
+    68          imports = set()
+    69          name, args, kwargs = self.operation.deconstruct()
+    70          operation_args = get_func_args(self.operation.__init__)
+        
+    71          # See if this operation is in django.db.migrations. If it is,
+    72          # We can just use the fact we already have that imported,
+    73          # otherwise, we need to add an import for the operation class.
+    74          if getattr(migrations, name, None) == self.operation.__class__:
+    75              self.feed("migrations.%s(" % name)
+    76          else:
+    77              imports.add("import %s" % (self.operation.__class__.__module__))
+    78              self.feed("%s.%s(" % (self.operation.__class__.__module__, name))
+        
+    79          self.indent()
+        
+    80          for i, arg in enumerate(args):
+    81              arg_value = arg
+    82              arg_name = operation_args[i]
+    83              _write(arg_name, arg_value)
+        
+    84          i = len(args)
+    85          # Only iterate over remaining arguments
+    86          for arg_name in operation_args[i:]:
+    87              if arg_name in kwargs:  # Don't sort to maintain signature order
+    88                  arg_value = kwargs[arg_name]
+    89                  _write(arg_name, arg_value)
+        
+    90          self.unindent()
+    91          self.feed("),")
+    92          return self.render(), imports
+        
+    93      def indent(self):
+    94          self.indentation += 1
+        
+    95      def unindent(self):
+    96          self.indentation -= 1
+        
+    97      def feed(self, line):
+    98          self.buff.append(" " * (self.indentation * 4) + line)
+        
+    99      def render(self):
+   100          return "\n".join(self.buff)
+        
+        
+   101  class MigrationWriter:
+   102      """
+   103      Take a Migration instance and is able to produce the contents
+   104      of the migration file from it.
+   105      """
+        
+   106      def __init__(self, migration, include_header=True):
+   107          self.migration = migration
+   108          self.include_header = include_header
+   109          self.needs_manual_porting = False
+        
+   110      def as_string(self):
+   111          """Return a string of the file contents."""
+   112          items = {
+   113              "replaces_str": "",
+   114              "initial_str": "",
+   115          }
+        
+   116          imports = set()
+        
+   117          # Deconstruct operations
+   118          operations = []
+   119          for operation in self.migration.operations:
+   120              operation_string, operation_imports = OperationWriter(operation).serialize()
+   121              imports.update(operation_imports)
+   122              operations.append(operation_string)
+   123          items["operations"] = "\n".join(operations) + "\n" if operations else ""
+        
+   124          # Format dependencies and write out swappable dependencies right
+   125          dependencies = []
+   126          for dependency in self.migration.dependencies:
+   127              if dependency[0] == "__setting__":
+   128                  dependencies.append(
+   129                      "        migrations.swappable_dependency(settings.%s),"
+   130                      % dependency[1]
+   131                  )
+   132                  imports.add("from django.conf import settings")
+   133              else:
+   134                  dependencies.append("        %s," % self.serialize(dependency)[0])
+   135          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+        
+   136          # Format imports nicely, swapping imports of functions from migration files
+   137          # for comments
+   138          migration_imports = set()
+   139          for line in list(imports):
+   140              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+   141                  migration_imports.add(line.split("import")[1].strip())
+   142                  imports.remove(line)
+   143                  self.needs_manual_porting = True
+        
+   144          # django.db.migrations is always used, but models import may not be.
+   145          # If models import exists, merge it with migrations import.
+   146          if "from django.db import models" in imports:
+   147              imports.discard("from django.db import models")
+   148              imports.add("from django.db import migrations, models")
+   149          else:
+   150              imports.add("from django.db import migrations")
+        
+   151          # Sort imports by the package / module to be imported (the part after
+   152          # "from" in "from ... import ..." or after "import" in "import ...").
+   153          sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+   154          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+   155          if migration_imports:
+   156              items["imports"] += (
+   157                  "\n\n# Functions from the following migrations need manual "
+   158                  "copying.\n# Move them and any dependencies into this file, "
+   159                  "then update the\n# RunPython operations to refer to the local "
+   160                  "versions:\n# %s"
+   161              ) % "\n# ".join(sorted(migration_imports))
+   162          # If there's a replaces, make a string for it
+   163          if self.migration.replaces:
+   164              items["replaces_str"] = (
+   165                  "\n    replaces = %s\n" % self.serialize(self.migration.replaces)[0]
+   166              )
+   167          # Hinting that goes into comment
+   168          if self.include_header:
+   169              items["migration_header"] = MIGRATION_HEADER_TEMPLATE % {
+   170                  "version": get_version(),
+   171                  "timestamp": now().strftime("%Y-%m-%d %H:%M"),
+   172              }
+   173          else:
+   174              items["migration_header"] = ""
+        
+   175          if self.migration.initial:
+   176              items["initial_str"] = "\n    initial = True\n"
+        
+   177          return MIGRATION_TEMPLATE % items
+        
+   178      @property
+   179      def basedir(self):
+   180          migrations_package_name, _ = MigrationLoader.migrations_module(
+   181              self.migration.app_label
+   182          )
+        
+   183          if migrations_package_name is None:
+   184              raise ValueError(
+   185                  "Django can't create migrations for app '%s' because "
+   186                  "migrations have been disabled via the MIGRATION_MODULES "
+   187                  "setting." % self.migration.app_label
+   188              )
+        
+   189          # See if we can import the migrations module directly
+   190          try:
+   191              migrations_module = import_module(migrations_package_name)
+   192          except ImportError:
+   193              pass
+   194          else:
+   195              try:
+   196                  return module_dir(migrations_module)
+   197              except ValueError:
+   198                  pass
+        
+   199          # Alright, see if it's a direct submodule of the app
+   200          app_config = apps.get_app_config(self.migration.app_label)
+   201          (
+   202              maybe_app_name,
+   203              _,
+   204              migrations_package_basename,
+   205          ) = migrations_package_name.rpartition(".")
+   206          if app_config.name == maybe_app_name:
+   207              return os.path.join(app_config.path, migrations_package_basename)
+        
+   208          # In case of using MIGRATION_MODULES setting and the custom package
+   209          # doesn't exist, create one, starting from an existing package
+   210          existing_dirs, missing_dirs = migrations_package_name.split("."), []
+   211          while existing_dirs:
+   212              missing_dirs.insert(0, existing_dirs.pop(-1))
+   213              try:
+   214                  base_module = import_module(".".join(existing_dirs))
+   215              except (ImportError, ValueError):
+   216                  continue
+   217              else:
+   218                  try:
+   219                      base_dir = module_dir(base_module)
+   220                  except ValueError:
+   221                      continue
+   222                  else:
+   223                      break
+   224          else:
+   225              raise ValueError(
+   226                  "Could not locate an appropriate location to create "
+   227                  "migrations package %s. Make sure the toplevel "
+   228                  "package exists and can be imported." % migrations_package_name
+   229              )
+        
+   230          final_dir = os.path.join(base_dir, *missing_dirs)
+   231          os.makedirs(final_dir, exist_ok=True)
+   232          for missing_dir in missing_dirs:
+   233              base_dir = os.path.join(base_dir, missing_dir)
+   234              with open(os.path.join(base_dir, "__init__.py"), "w"):
+   235                  pass
+        
+   236          return final_dir
+        
+   237      @property
+   238      def filename(self):
+   239          return "%s.py" % self.migration.name
+        
+   240      @property
+   241      def path(self):
+   242          return os.path.join(self.basedir, self.filename)
+        
+   243      @classmethod
+   244      def serialize(cls, value):
+   245          return serializer_factory(value).serialize()
+        
+   246      @classmethod
+   247      def register_serializer(cls, type_, serializer):
+   248          Serializer.register(type_, serializer)
+        
+   249      @classmethod
+   250      def unregister_serializer(cls, type_):
+   251          Serializer.unregister(type_)
+        
+        
+   252  MIGRATION_HEADER_TEMPLATE = """\
+   253  # Generated by Django %(version)s on %(timestamp)s
+        
+   254  """
+        
+        
+   255  MIGRATION_TEMPLATE = """\
+   256  %(migration_header)s%(imports)s
+        
+   257  class Migration(migrations.Migration):
+   258  %(replaces_str)s%(initial_str)s
+   259      dependencies = [
+   260  %(dependencies)s\
+   261      ]
+        
+   262      operations = [
+   263  %(operations)s\
+   264      ]
+   265  """
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I'll detect the file's indentation style before making the minimal one-line change to the import sorting key.  
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+django/db/migrations/writer.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll display the import-sorting lines with visible whitespace so I can make a minimal one-line change safely.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+148
+----ARG----
+end_line
+156
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···148          for dependency in self.migration.dependencies:
+···149              if dependency[0] == "__setting__":
+···150                  dependencies.append(
+···151                      "        migrations.swappable_dependency(settings.%s),"
+···152                      % dependency[1]
+···153                  )
+···154                  imports.add("from django.conf import settings")
+···155              else:
+···156                  dependencies.append("        %s," % self.serialize(dependency)[0])
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll make a minimal one-line change to the import sorting key so plain "import module" statements are ordered before "from ... import ..." statements within the same module group.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+153
+----ARG----
+to_line
+153
+----ARG----
+content
+        sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+✓ Successfully replaced lines 153-153 in django/db/migrations/writer.py. Replaced 1 lines with 1 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 312 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   153 - │                 )
+   153 + │         sorted_imports = sorted(imports, key=lambda i: (i.sp… ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/db/migrations/writer.py:
+✗ Syntax error in django/db/migrations/writer.py:
+File "django/db/migrations/writer.py", line 150
+    dependencies.append(
+                       ^
+SyntaxError: '(' was never closed
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I'll reopen the affected region to inspect the missing closing parenthesis and surrounding context before making the minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+140
+----ARG----
+end_line
+170
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···140          for operation in self.migration.operations:
+···141              operation_string, operation_imports = OperationWriter(operation).serialize()
+···142              imports.update(operation_imports)
+···143              operations.append(operation_string)
+···144          items["operations"] = "\n".join(operations) + "\n" if operations else ""
+········
+···145          # Format dependencies and write out swappable dependencies right
+···146          dependencies = []
+···147          for dependency in self.migration.dependencies:
+···148              if dependency[0] == "__setting__":
+···149                  dependencies.append(
+···150                      "        migrations.swappable_dependency(settings.%s),"
+···151                      % dependency[1]
+···152          sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+···153                  imports.add("from django.conf import settings")
+···154              else:
+···155                  dependencies.append("        %s," % self.serialize(dependency)[0])
+···156          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+········
+···157          # Format imports nicely, swapping imports of functions from migration files
+···158          # for comments
+···159          migration_imports = set()
+···160          for line in list(imports):
+···161              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+···162                  migration_imports.add(line.split("import")[1].strip())
+···163                  imports.remove(line)
+···164                  self.needs_manual_porting = True
+········
+···165          # django.db.migrations is always used, but models import may not be.
+···166          # If models import exists, merge it with migrations import.
+···167          if "from django.db import models" in imports:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I will restore the missing closing parenthesis and move the imports.add line back into place by replacing the malformed block with the original correctly-indented block (minimal one-block change).  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+149
+----ARG----
+to_line
+153
+----ARG----
+content
+            dependencies.append(
+                "        migrations.swappable_dependency(settings.%s),"
+                % dependency[1]
+            )
+            imports.add("from django.conf import settings")
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+✓ Successfully replaced lines 149-153 in django/db/migrations/writer.py. Replaced 5 lines with 5 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 312 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   149 - │             if dependency[0] == "__setting__":
+   149 + │             dependencies.append( 
+   150 - │                 dependencies.append(
+   150 + │                 "        migrations.swappable_dependency(set… 
+   151 - │                     "        migrations.swappable_dependency…
+   151 + │                 % dependency[1] ⚠️INDENT
+   152 - │                     % dependency[1]
+   152 + │             ) ⚠️INDENT
+   153 - │         sorted_imports = sorted(imports, key=lambda i: (i.sp…
+   153 + │             imports.add("from django.conf import settings") ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/db/migrations/writer.py:
+✗ Syntax error in django/db/migrations/writer.py:
+Sorry: IndentationError: unexpected indent (writer.py, line 154)
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+The previous edit moved the new sorted_imports line into the wrong place and caused indentation/syntax errors; I'll re-open the surrounding region to locate the misplaced line so I can fix it with a minimal, correctly-indented replacement.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+140
+----ARG----
+end_line
+180
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···140          for operation in self.migration.operations:
+···141              operation_string, operation_imports = OperationWriter(operation).serialize()
+···142              imports.update(operation_imports)
+···143              operations.append(operation_string)
+···144          items["operations"] = "\n".join(operations) + "\n" if operations else ""
+········
+···145          # Format dependencies and write out swappable dependencies right
+···146          dependencies = []
+···147          for dependency in self.migration.dependencies:
+···148              dependencies.append(
+···149                  "        migrations.swappable_dependency(settings.%s),"
+···150                  % dependency[1]
+···151              )
+···152              imports.add("from django.conf import settings")
+···153                  imports.add("from django.conf import settings")
+···154              else:
+···155                  dependencies.append("        %s," % self.serialize(dependency)[0])
+···156          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+········
+···157          # Format imports nicely, swapping imports of functions from migration files
+···158          # for comments
+···159          migration_imports = set()
+···160          for line in list(imports):
+···161              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+···162                  migration_imports.add(line.split("import")[1].strip())
+···163                  imports.remove(line)
+···164                  self.needs_manual_porting = True
+········
+···165          # django.db.migrations is always used, but models import may not be.
+···166          # If models import exists, merge it with migrations import.
+···167          if "from django.db import models" in imports:
+···168              imports.discard("from django.db import models")
+···169              imports.add("from django.db import migrations, models")
+···170          else:
+···171              imports.add("from django.db import migrations")
+········
+···172          # Sort imports by the package / module to be imported (the part after
+···173          # "from" in "from ... import ..." or after "import" in "import ...").
+···174          sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+···175          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+···176          if migration_imports:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I will delete the accidentally duplicated/misindented imports.add line to restore correct indentation and syntax before proceeding to verify and finalize the intended import-sorting change.
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+153
+----ARG----
+to_line
+153
+----ARG----
+content
+
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+✓ Successfully replaced lines 153-153 in django/db/migrations/writer.py. Replaced 1 lines with 1 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 312 total lines.
+⚠️  Warning: Removed imports, imports. Verify they're not used elsewhere.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   153 - │             imports.add("from django.conf import settings")
+   153 + │  ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/db/migrations/writer.py:
+✗ Syntax error in django/db/migrations/writer.py:
+Sorry: IndentationError: unexpected indent (writer.py, line 154)
+
+----------------------------
+|MESSAGE(role="assistant", id=23)|
+There's an IndentationError after the prior edits; I'll re-open the surrounding region with whitespace highlighted to locate the misplaced/duplicate lines so I can make a minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+144
+----ARG----
+end_line
+176
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=24)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···144          items["operations"] = "\n".join(operations) + "\n" if operations else ""
+········
+···145          # Format dependencies and write out swappable dependencies right
+···146          dependencies = []
+···147          for dependency in self.migration.dependencies:
+···148              dependencies.append(
+···149                  "        migrations.swappable_dependency(settings.%s),"
+···150                  % dependency[1]
+···151              )
+········
+···152                  imports.add("from django.conf import settings")
+···153              else:
+···154                  dependencies.append("        %s," % self.serialize(dependency)[0])
+···155          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+········
+···156          # Format imports nicely, swapping imports of functions from migration files
+···157          # for comments
+···158          migration_imports = set()
+···159          for line in list(imports):
+···160              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+···161                  migration_imports.add(line.split("import")[1].strip())
+···162                  imports.remove(line)
+···163                  self.needs_manual_porting = True
+········
+···164          # django.db.migrations is always used, but models import may not be.
+···165          # If models import exists, merge it with migrations import.
+···166          if "from django.db import models" in imports:
+···167              imports.discard("from django.db import models")
+···168              imports.add("from django.db import migrations, models")
+···169          else:
+···170              imports.add("from django.db import migrations")
+········
+···171          # Sort imports by the package / module to be imported (the part after
+
+
+----------------------------
+|MESSAGE(role="assistant", id=25)|
+I will restore the dependency block to correct indentation (fixing the IndentationError) so the file is syntactically valid; after this small, targeted replacement I'll re-open the region to verify the fix.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+147
+----ARG----
+to_line
+154
+----ARG----
+content
+            for dependency in self.migration.dependencies:
+                if dependency[0] == "__setting__":
+                    dependencies.append(
+                        "        migrations.swappable_dependency(settings.%s),"
+                        % dependency[1]
+                    )
+                    imports.add("from django.conf import settings")
+                else:
+                    dependencies.append("        %s," % self.serialize(dependency)[0])
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=26)|
+✓ Successfully replaced lines 147-154 in django/db/migrations/writer.py. Replaced 8 lines with 9 lines (net change: +1 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 313 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   147 - │         dependencies = []
+   147 + │             for dependency in self.migration.dependencies: ⚠️INDENT
+   148 - │         for dependency in self.migration.dependencies:
+   148 + │                 if dependency[0] == "__setting__": ⚠️INDENT
+   149 - │             dependencies.append(
+   149 + │                     dependencies.append( ⚠️INDENT
+   150 - │                 "        migrations.swappable_dependency(set…
+   150 + │                         "        migrations.swappable_depend… ⚠️INDENT
+   151 - │                 % dependency[1]
+   151 + │                         % dependency[1] ⚠️INDENT
+   152 - │             )
+   152 + │                     ) ⚠️INDENT
+   153 - │ 
+   153 + │                     imports.add("from django.conf import set… ⚠️INDENT
+   154 - │                 imports.add("from django.conf import setting…
+   154 + │                 else: 
+   155 + │                     dependencies.append("        %s," % self… (ADDED) ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/db/migrations/writer.py:
+✗ Syntax error in django/db/migrations/writer.py:
+Sorry: IndentationError: unexpected indent (writer.py, line 147)
+
+----------------------------
+|MESSAGE(role="assistant", id=27)|
+The file currently has indentation/syntax issues after prior edits; I'll display the top portion of django/db/migrations/writer.py with whitespace highlighted to inspect and plan a minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+220
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=28)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+·····1  import os
+·····2  import re
+·····3  from importlib import import_module
+········
+·····4  from django import get_version
+·····5  from django.apps import apps
+········
+·····6  # SettingsReference imported for backwards compatibility in Django 2.2.
+·····7  from django.conf import SettingsReference  # NOQA
+·····8  from django.db import migrations
+·····9  from django.db.migrations.loader import MigrationLoader
+····10  from django.db.migrations.serializer import Serializer, serializer_factory
+····11  from django.utils.inspect import get_func_args
+····12  from django.utils.module_loading import module_dir
+····13  from django.utils.timezone import now
+········
+········
+····14  class OperationWriter:
+····15      def __init__(self, operation, indentation=2):
+····16          self.operation = operation
+····17          self.buff = []
+····18          self.indentation = indentation
+········
+····19      def serialize(self):
+····20          def _write(_arg_name, _arg_value):
+····21              if _arg_name in self.operation.serialization_expand_args and isinstance(
+····22                  _arg_value, (list, tuple, dict)
+····23              ):
+····24                  if isinstance(_arg_value, dict):
+····25                      self.feed("%s={" % _arg_name)
+····26                      self.indent()
+····27                      for key, value in _arg_value.items():
+····28                          key_string, key_imports = MigrationWriter.serialize(key)
+····29                          arg_string, arg_imports = MigrationWriter.serialize(value)
+····30                          args = arg_string.splitlines()
+····31                          if len(args) > 1:
+····32                              self.feed("%s: %s" % (key_string, args[0]))
+····33                              for arg in args[1:-1]:
+····34                                  self.feed(arg)
+····35                              self.feed("%s," % args[-1])
+····36                          else:
+····37                              self.feed("%s: %s," % (key_string, arg_string))
+····38                          imports.update(key_imports)
+····39                          imports.update(arg_imports)
+····40                      self.unindent()
+····41                      self.feed("},")
+····42                  else:
+····43                      self.feed("%s=[" % _arg_name)
+····44                      self.indent()
+····45                      for item in _arg_value:
+····46                          arg_string, arg_imports = MigrationWriter.serialize(item)
+····47                          args = arg_string.splitlines()
+····48                          if len(args) > 1:
+····49                              for arg in args[:-1]:
+····50                                  self.feed(arg)
+····51                              self.feed("%s," % args[-1])
+····52                          else:
+····53                              self.feed("%s," % arg_string)
+····54                          imports.update(arg_imports)
+····55                      self.unindent()
+····56                      self.feed("],")
+····57              else:
+····58                  arg_string, arg_imports = MigrationWriter.serialize(_arg_value)
+····59                  args = arg_string.splitlines()
+····60                  if len(args) > 1:
+····61                      self.feed("%s=%s" % (_arg_name, args[0]))
+····62                      for arg in args[1:-1]:
+····63                          self.feed(arg)
+····64                      self.feed("%s," % args[-1])
+····65                  else:
+····66                      self.feed("%s=%s," % (_arg_name, arg_string))
+····67                  imports.update(arg_imports)
+········
+····68          imports = set()
+····69          name, args, kwargs = self.operation.deconstruct()
+····70          operation_args = get_func_args(self.operation.__init__)
+········
+····71          # See if this operation is in django.db.migrations. If it is,
+····72          # We can just use the fact we already have that imported,
+····73          # otherwise, we need to add an import for the operation class.
+····74          if getattr(migrations, name, None) == self.operation.__class__:
+····75              self.feed("migrations.%s(" % name)
+····76          else:
+····77              imports.add("import %s" % (self.operation.__class__.__module__))
+····78              self.feed("%s.%s(" % (self.operation.__class__.__module__, name))
+········
+····79          self.indent()
+········
+····80          for i, arg in enumerate(args):
+····81              arg_value = arg
+····82              arg_name = operation_args[i]
+····83              _write(arg_name, arg_value)
+········
+····84          i = len(args)
+····85          # Only iterate over remaining arguments
+····86          for arg_name in operation_args[i:]:
+····87              if arg_name in kwargs:  # Don't sort to maintain signature order
+····88                  arg_value = kwargs[arg_name]
+····89                  _write(arg_name, arg_value)
+········
+····90          self.unindent()
+····91          self.feed("),")
+····92          return self.render(), imports
+········
+····93      def indent(self):
+····94          self.indentation += 1
+········
+····95      def unindent(self):
+····96          self.indentation -= 1
+········
+····97      def feed(self, line):
+····98          self.buff.append(" " * (self.indentation * 4) + line)
+········
+····99      def render(self):
+···100          return "\n".join(self.buff)
+········
+········
+···101  class MigrationWriter:
+···102      """
+···103      Take a Migration instance and is able to produce the contents
+···104      of the migration file from it.
+···105      """
+········
+···106      def __init__(self, migration, include_header=True):
+···107          self.migration = migration
+···108          self.include_header = include_header
+···109          self.needs_manual_porting = False
+········
+···110      def as_string(self):
+···111          """Return a string of the file contents."""
+···112          items = {
+···113              "replaces_str": "",
+···114              "initial_str": "",
+···115          }
+········
+···116          imports = set()
+········
+···117          # Deconstruct operations
+···118          operations = []
+···119          for operation in self.migration.operations:
+···120              operation_string, operation_imports = OperationWriter(operation).serialize()
+···121              imports.update(operation_imports)
+···122              operations.append(operation_string)
+···123          items["operations"] = "\n".join(operations) + "\n" if operations else ""
+········
+···124          # Format dependencies and write out swappable dependencies right
+···125              for dependency in self.migration.dependencies:
+···126                  if dependency[0] == "__setting__":
+···127                      dependencies.append(
+···128                          "        migrations.swappable_dependency(settings.%s),"
+···129                          % dependency[1]
+···130                      )
+···131                      imports.add("from django.conf import settings")
+···132                  else:
+···133                      dependencies.append("        %s," % self.serialize(dependency)[0])
+···134              else:
+···135                  dependencies.append("        %s," % self.serialize(dependency)[0])
+···136          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+········
+···137          # Format imports nicely, swapping imports of functions from migration files
+···138          # for comments
+···139          migration_imports = set()
+···140          for line in list(imports):
+···141              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+···142                  migration_imports.add(line.split("import")[1].strip())
+···143                  imports.remove(line)
+···144                  self.needs_manual_porting = True
+········
+···145          # django.db.migrations is always used, but models import may not be.
+···146          # If models import exists, merge it with migrations import.
+···147          if "from django.db import models" in imports:
+···148              imports.discard("from django.db import models")
+···149              imports.add("from django.db import migrations, models")
+···150          else:
+···151              imports.add("from django.db import migrations")
+········
+···152          # Sort imports by the package / module to be imported (the part after
+···153          # "from" in "from ... import ..." or after "import" in "import ...").
+···154          sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+···155          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+···156          if migration_imports:
+···157              items["imports"] += (
+···158                  "\n\n# Functions from the following migrations need manual "
+···159                  "copying.\n# Move them and any dependencies into this file, "
+···160                  "then update the\n# RunPython operations to refer to the local "
+···161                  "versions:\n# %s"
+···162              ) % "\n# ".join(sorted(migration_imports))
+···163          # If there's a replaces, make a string for it
+···164          if self.migration.replaces:
+···165              items["replaces_str"] = (
+···166                  "\n    replaces = %s\n" % self.serialize(self.migration.replaces)[0]
+···167              )
+···168          # Hinting that goes into comment
+···169          if self.include_header:
+···170              items["migration_header"] = MIGRATION_HEADER_TEMPLATE % {
+···171                  "version": get_version(),
+···172                  "timestamp": now().strftime("%Y-%m-%d %H:%M"),
+···173              }
+···174          else:
+···175              items["migration_header"] = ""
+········
+···176          if self.migration.initial:
+···177              items["initial_str"] = "\n    initial = True\n"
+········
+···178          return MIGRATION_TEMPLATE % items
+········
+···179      @property
+···180      def basedir(self):
+···181          migrations_package_name, _ = MigrationLoader.migrations_module(
+···182              self.migration.app_label
+···183          )
+········
+···184          if migrations_package_name is None:
+···185              raise ValueError(
+···186                  "Django can't create migrations for app '%s' because "
+···187                  "migrations have been disabled via the MIGRATION_MODULES "
+···188                  "setting." % self.migration.app_label
+···189              )
+········
+···190          # See if we can import the migrations module directly
+
+
+----------------------------
+|MESSAGE(role="assistant", id=29)|
+I'll make a minimal one-line change to sort plain "import ..." before "from ... import ..." by updating the sorting key on the existing sorted_imports line.
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+154
+----ARG----
+to_line
+154
+----ARG----
+content
+          sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=30)|
+✓ Successfully replaced lines 154-154 in django/db/migrations/writer.py. Replaced 1 lines with 1 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 313 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   154 - │                 else:
+   154 + │           sorted_imports = sorted(imports, key=lambda i: (i.… ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/db/migrations/writer.py:
+✗ Syntax error in django/db/migrations/writer.py:
+Sorry: IndentationError: unexpected indent (writer.py, line 147)
+
+----------------------------
+|MESSAGE(role="assistant", id=31)|
+I need to inspect the current content around the dependencies/import sorting region (lines ~120–180) with whitespace highlighted so I can craft the minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+120
+----ARG----
+end_line
+180
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=32)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···120      Take a Migration instance and is able to produce the contents
+···121      of the migration file from it.
+···122      """
+········
+···123      def __init__(self, migration, include_header=True):
+···124          self.migration = migration
+···125          self.include_header = include_header
+···126          self.needs_manual_porting = False
+········
+···127      def as_string(self):
+···128          """Return a string of the file contents."""
+···129          items = {
+···130              "replaces_str": "",
+···131              "initial_str": "",
+···132          }
+········
+···133          imports = set()
+········
+···134          # Deconstruct operations
+···135          operations = []
+···136          for operation in self.migration.operations:
+···137              operation_string, operation_imports = OperationWriter(operation).serialize()
+···138              imports.update(operation_imports)
+···139              operations.append(operation_string)
+···140          items["operations"] = "\n".join(operations) + "\n" if operations else ""
+········
+···141          # Format dependencies and write out swappable dependencies right
+···142              for dependency in self.migration.dependencies:
+···143                  if dependency[0] == "__setting__":
+···144                      dependencies.append(
+···145                          "        migrations.swappable_dependency(settings.%s),"
+···146                          % dependency[1]
+···147                      )
+···148                      imports.add("from django.conf import settings")
+···149            sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+···150                      dependencies.append("        %s," % self.serialize(dependency)[0])
+···151              else:
+···152                  dependencies.append("        %s," % self.serialize(dependency)[0])
+···153          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+········
+···154          # Format imports nicely, swapping imports of functions from migration files
+···155          # for comments
+···156          migration_imports = set()
+···157          for line in list(imports):
+···158              if re.match(r"^import (.*)\.\d+[^\s]*$", line):
+···159                  migration_imports.add(line.split("import")[1].strip())
+···160                  imports.remove(line)
+···161                  self.needs_manual_porting = True
+········
+···162          # django.db.migrations is always used, but models import may not be.
+···163          # If models import exists, merge it with migrations import.
+···164          if "from django.db import models" in imports:
+···165              imports.discard("from django.db import models")
+···166              imports.add("from django.db import migrations, models")
+···167          else:
+···168              imports.add("from django.db import migrations")
+········
+···169          # Sort imports by the package / module to be imported (the part after
+···170          # "from" in "from ... import ..." or after "import" in "import ...").
+···171          sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+···172          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+
+
+----------------------------
+|MESSAGE(role="assistant", id=33)|
+The dependency block and a stray, misindented line were introduced by prior edits; I'll restore the original dependency block (minimal targeted replacement) so the file is syntactically valid before re-applying the import-sorting key change.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+141
+----ARG----
+to_line
+153
+----ARG----
+content
+          # Format dependencies and write out swappable dependencies right
+          dependencies = []
+          for dependency in self.migration.dependencies:
+              if dependency[0] == "__setting__":
+                  dependencies.append(
+                      "        migrations.swappable_dependency(settings.%s),"
+                      % dependency[1]
+                  )
+                  imports.add("from django.conf import settings")
+              else:
+                  dependencies.append("        %s," % self.serialize(dependency)[0])
+          items["dependencies"] = "\n".join(dependencies) + "\n" if dependencies else ""
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=34)|
+✓ Successfully replaced lines 141-153 in django/db/migrations/writer.py. Replaced 13 lines with 12 lines (net change: -1 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 312 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   141 - │             operation_string, operation_imports = OperationW…
+   141 + │           # Format dependencies and write out swappable depe… ⚠️INDENT
+   142 - │             imports.update(operation_imports)
+   142 + │           dependencies = [] ⚠️INDENT
+   143 - │             operations.append(operation_string)
+   143 + │           for dependency in self.migration.dependencies: ⚠️INDENT
+   144 - │         items["operations"] = "\n".join(operations) + "\n" i…
+   144 + │               if dependency[0] == "__setting__": ⚠️INDENT
+   145 - │ 
+   145 + │                   dependencies.append( ⚠️INDENT
+   146 - │         # Format dependencies and write out swappable depend…
+   146 + │                       "        migrations.swappable_dependen… ⚠️INDENT
+   147 - │             for dependency in self.migration.dependencies:
+   147 + │                       % dependency[1] ⚠️INDENT
+   148 - │                 if dependency[0] == "__setting__":
+   148 + │                   ) ⚠️INDENT
+   149 - │                     dependencies.append(
+   149 + │                   imports.add("from django.conf import setti… ⚠️INDENT
+   150 - │                         "        migrations.swappable_depend…
+   150 + │               else: ⚠️INDENT
+   151 - │                         % dependency[1]
+   151 + │                   dependencies.append("        %s," % self.s… ⚠️INDENT
+   152 - │                     )
+   152 + │           items["dependencies"] = "\n".join(dependencies) + … ⚠️INDENT
+   153 - │                     imports.add("from django.conf import set… (REMOVED)
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/db/migrations/writer.py:
+✗ Syntax error in django/db/migrations/writer.py:
+Sorry: IndentationError: unexpected indent (writer.py, line 154)
+
+----------------------------
+|MESSAGE(role="assistant", id=35)|
+I will restore the migration writer file to the repository version to undo the broken edits, so I can reapply the single minimal change safely.  
+----BEGIN_FUNCTION_CALL----
+run_bash_cmd
+----ARG----
+command
+git checkout -- django/db/migrations/writer.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=36)|
+
+
+----------------------------
+|MESSAGE(role="assistant", id=37)|
+I'll re-open the original region around the import-sorting logic to inspect it (with whitespace visible) so I can make a single, minimal, correctly-indented change next.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+148
+----ARG----
+end_line
+156
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=38)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···148          for dependency in self.migration.dependencies:
+···149              if dependency[0] == "__setting__":
+···150                  dependencies.append(
+···151                      "        migrations.swappable_dependency(settings.%s),"
+···152                      % dependency[1]
+···153                  )
+···154                  imports.add("from django.conf import settings")
+···155              else:
+···156                  dependencies.append("        %s," % self.serialize(dependency)[0])
+
+
+----------------------------
+|MESSAGE(role="assistant", id=39)|
+I need to confirm the exact line and whitespace of the existing sorted_imports line before making the minimal replacement to ensure no indentation errors.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+168
+----ARG----
+end_line
+176
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=40)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···168          # django.db.migrations is always used, but models import may not be.
+···169          # If models import exists, merge it with migrations import.
+···170          if "from django.db import models" in imports:
+···171              imports.discard("from django.db import models")
+···172              imports.add("from django.db import migrations, models")
+···173          else:
+···174              imports.add("from django.db import migrations")
+········
+···175          # Sort imports by the package / module to be imported (the part after
+
+
+----------------------------
+|MESSAGE(role="assistant", id=41)|
+I will locate the exact line where sorted_imports is defined so I can make the minimal one-line replacement safely.
+----BEGIN_FUNCTION_CALL----
+search_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+pattern
+sorted_imports = sorted(imports
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=42)|
+178:        sorted_imports = sorted(imports, key=lambda i: i.split()[1])
+
+
+----------------------------
+|MESSAGE(role="assistant", id=43)|
+I'll make a minimal one-line edit to sort plain "import ..." before "from ... import ..." by updating the sorting key on the existing sorted_imports line.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+from_line
+178
+----ARG----
+to_line
+178
+----ARG----
+content
+        sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=44)|
+✓ Successfully replaced lines 178-178 in django/db/migrations/writer.py. Replaced 1 lines with 1 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 312 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   178 - │         sorted_imports = sorted(imports, key=lambda i: i.spl…
+   178 + │         sorted_imports = sorted(imports, key=lambda i: (i.sp… 
+──────────────────────────────────────────────────────────────────────
+
+----------------------------
+|MESSAGE(role="assistant", id=45)|
+I'll verify the edit by showing the surrounding lines (including the modified sorted_imports) with whitespace highlighted to confirm indentation and correctness.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+172
+----ARG----
+end_line
+184
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=46)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···172              imports.add("from django.db import migrations, models")
+···173          else:
+···174              imports.add("from django.db import migrations")
+········
+···175          # Sort imports by the package / module to be imported (the part after
+···176          # "from" in "from ... import ..." or after "import" in "import ...").
+···177          sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+···178          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+···179          if migration_imports:
+···180              items["imports"] += (
+···181                  "\n\n# Functions from the following migrations need manual "
+···182                  "copying.\n# Move them and any dependencies into this file, "
+···183                  "then update the\n# RunPython operations to refer to the local "
+
+
+----------------------------
+|MESSAGE(role="assistant", id=47)|
+I've made the minimal change to sort plain "import ..." before "from ... import ..." and will now run the repository verification checks before finishing.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=48)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 1
+   Lines deleted: 1
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+⚠️  CHECK 4 WARNING: 1 file(s) have minor static analysis warnings
+   (Consider reviewing, but not blocking)
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/django/db/migrations/writer.py b/django/db/migrations/writer.py
+index a59f0c8dcb..9922991ed2 100644
+--- a/django/db/migrations/writer.py
++++ b/django/db/migrations/writer.py
+@@ -175,7 +175,7 @@ class MigrationWriter:
+ 
+         # Sort imports by the package / module to be imported (the part after
+         # "from" in "from ... import ..." or after "import" in "import ...").
+-        sorted_imports = sorted(imports, key=lambda i: i.split()[1])
++        sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+         items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+         if migration_imports:
+             items["imports"] += (
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+
+----------------------------
+|MESSAGE(role="assistant", id=49)|
+I updated MigrationWriter to sort plain "import ..." lines before "from ... import ..." lines (single-line change) and ran verification which passed.  
+----BEGIN_FUNCTION_CALL----
+finish
+----ARG----
+result
+Updated django/db/migrations/writer.py: changed the import-sorting key so plain "import <module>" entries are ordered before "from <module> import ..." within the same module group (single-line, minimal change). verify_before_finish passed.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=50)|
+LLM Judge Review - Changes do NOT adequately address the task:
+
+REASONING: The change attempts to prefer "import X" before "from X import Y" by adding a tuple key, but the tuple elements are reversed: it sorts by module first and only places import-lines before from-lines when the module is identical. That fails the reported case (import datetime, from django.db, import time) because "django.db" sorts between "datetime" and "time". Also the startswith('import ') check is brittle to leading whitespace. Fix by sorting primarily on import type, e.g. key=lambda i: (0 if i.lstrip().startswith('import ') else 1, i.split(maxsplit=1)[1]).  
+VERDICT: REJECT
+END_OF_JUDGE_RESPONSE
+
+Please review the feedback and make necessary corrections before calling finish() again.
+
+----------------------------
+|MESSAGE(role="assistant", id=51)|
+I'll update the sorting key to prefer plain "import ..." lines first (using lstrip().startswith to ignore leading whitespace) and then sort by module name using split(maxsplit=1)[1]; this is a single-line, minimal replacement.  
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+old_text
+        sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
+----ARG----
+new_text
+        sorted_imports = sorted(imports, key=lambda i: (0 if i.lstrip().startswith('import ') else 1, i.split(maxsplit=1)[1]))
+----ARG----
+count
+1
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=52)|
+✓ Successfully replaced 1 occurrence(s) in django/db/migrations/writer.py.
+Found 1 total occurrence(s) of the text.
+TIP: Call show_file to verify the change was correct.
+
+----------------------------
+|MESSAGE(role="assistant", id=53)|
+I'll verify the updated sorting line and its surrounding context with whitespace highlighted to ensure correct indentation and ordering logic.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/db/migrations/writer.py
+----ARG----
+start_line
+170
+----ARG----
+end_line
+182
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=54)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···170          if "from django.db import models" in imports:
+···171              imports.discard("from django.db import models")
+···172              imports.add("from django.db import migrations, models")
+···173          else:
+···174              imports.add("from django.db import migrations")
+········
+···175          # Sort imports by the package / module to be imported (the part after
+···176          # "from" in "from ... import ..." or after "import" in "import ...").
+···177          sorted_imports = sorted(imports, key=lambda i: (0 if i.lstrip().startswith('import ') else 1, i.split(maxsplit=1)[1]))
+···178          items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+···179          if migration_imports:
+···180              items["imports"] += (
+···181                  "\n\n# Functions from the following migrations need manual "
+
+
+----------------------------
+|MESSAGE(role="assistant", id=55)|
+Run the repository verification checks (syntax, diffs, and static warnings) before finalizing the change.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=56)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 1
+   Lines deleted: 1
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+⚠️  CHECK 4 WARNING: 1 file(s) have minor static analysis warnings
+   (Consider reviewing, but not blocking)
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/django/db/migrations/writer.py b/django/db/migrations/writer.py
+index 9922991ed2..3aea62d079 100644
+--- a/django/db/migrations/writer.py
++++ b/django/db/migrations/writer.py
+@@ -175,7 +175,7 @@ class MigrationWriter:
+ 
+         # Sort imports by the package / module to be imported (the part after
+         # "from" in "from ... import ..." or after "import" in "import ...").
+-        sorted_imports = sorted(imports, key=lambda i: (i.split()[1], 0 if i.startswith('import ') else 1))
++        sorted_imports = sorted(imports, key=lambda i: (0 if i.lstrip().startswith('import ') else 1, i.split(maxsplit=1)[1]))
+         items["imports"] = "\n".join(sorted_imports) + "\n" if imports else ""
+         if migration_imports:
+             items["imports"] += (
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+

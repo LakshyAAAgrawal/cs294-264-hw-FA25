@@ -45,36 +45,24 @@ def process_instance(
     try:
         # Initialize the environment
         env = SWEEnvironment(instance)
-        env.run_bash_cmd("pip install pyflakes")
-        # Initialize the agent
-        agent = ReactAgent("swe-agent", parser, llm, instance_id=instance_id, output_dir=output_dir)
+        try:
+            output = env.run_bash_cmd("pip install -q pyflakes 2>/dev/null || true")  # Quiet install, don't fail if it errors
+            print(f"Installed pyflakes: {output}")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            pass
+        # Initialize the agent with verification and LLM judge functions
+        agent = ReactAgent(
+            "swe-agent", 
+            parser, 
+            llm, 
+            instance_id=instance_id, 
+            output_dir=output_dir, 
+            verify_code_quality_fn=env.verify_before_finish,
+            llm_as_judge_fn=env.llm_judge_validate_changes
+        )
         
-        # Add environment functions to the agent
-        # agent.add_functions([
-        #     env.run_bash_cmd, 
-        #     env.replace_in_file, 
-        #     env.show_file,
-        #     env.search_in_file,
-        #     env.list_files,
-        #     env.find_file,
-        #     env.search_in_directory,
-        #     env.generate_patch,
-        #     env.insert_lines_at,
-        #     env.delete_lines,
-        #     env.git_diff,
-        #     env.check_syntax,
-        #     env.check_repo_syntax,
-        #     env.replace_between,
-        #     env.run_python_snippet,
-        #     env.run_tests,
-        #     env.detect_indentation,
-        #     env.list_modified_python_files,
-        #     env.git_apply,
-
-        #     env.get_file_content,
-        #     env.set_file_content,
-        #     env.regex_replace_in_file,
-        # ])
         agent.add_functions([
             env.run_bash_cmd, 
             env.show_file,
@@ -91,7 +79,6 @@ def process_instance(
             env.generate_patch,
             env.run_tests,
             env.check_repo_syntax,
-            env.check_code_quality,         # ← Semantic analysis (undefined variables, etc.)
             env.git_apply,
             env.run_python_snippet,
             env.detect_indentation,

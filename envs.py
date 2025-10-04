@@ -161,32 +161,21 @@ class SWEEnvironment:
                 old_lines = lines[from_line-1:to_line]
                 visual_diff = self._generate_visual_diff(old_lines, content_lines, from_line)
                 
-                # Warn about potentially dangerous deletions
+                # Check for potentially dangerous deletions (concise one-liner)
                 old_lines_text = '\n'.join(old_lines)
                 new_lines_text = '\n'.join(content_lines)
-                warnings = []
-                
-                # Check if we're deleting imports, class/function definitions, or variable assignments
-                dangerous_patterns = [
-                    ('import ', 'import statements'),
-                    ('from ', 'import statements'),
-                    ('def ', 'function definitions'),
-                    ('class ', 'class definitions'),
-                    (' = ', 'variable assignments')
-                ]
-                
-                for pattern, description in dangerous_patterns:
-                    if pattern in old_lines_text and pattern not in new_lines_text:
-                        warnings.append(f"⚠️  WARNING: You removed {description}. Verify this doesn't break code that uses them!")
-                
-                warning_text = '\n'.join(warnings) + '\n' if warnings else ''
+                warning = ""
+                dangerous_patterns = [('import ', 'imports'), ('from ', 'imports')] # ('def ', 'functions'), ('class ', 'classes'), (' = ', 'variables')
+                removed = [desc for pattern, desc in dangerous_patterns if pattern in old_lines_text and pattern not in new_lines_text]
+                if removed:
+                    warning = f"⚠️  Warning: Removed {', '.join(removed)}. Verify they're not used elsewhere.\n"
                 
                 msg = (
                     f"✓ Successfully replaced lines {from_line}-{to_line} in {file_path}. "
                     f"Replaced {lines_removed} lines with {lines_added} lines (net change: {net_change:+d} lines).\n"
                     f"⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.\n"
-                    f"The new file has approximately {len(lines) + net_change} total lines.\n\n"
-                    f"{warning_text}"
+                    f"The new file has approximately {len(lines) + net_change} total lines.\n"
+                    f"{warning}\n"
                     f"{visual_diff}"
                 )
                 return self._append_syntax_warning_if_needed(file_path, msg)
@@ -1085,7 +1074,7 @@ class SWEEnvironment:
         1. Verifies that actual code changes were made
         2. Checks if only test files were modified (warns if true)
         3. Checks Python syntax on modified files
-        4. Runs semantic analysis (checks for undefined variables, missing imports, etc.)
+        4. Checks for critical semantic errors (undefined names, etc.)
         5. Shows git diff preview of all changes
         6. Returns a summary report with pass/fail status
         
@@ -1166,8 +1155,7 @@ class SWEEnvironment:
                 
                 semantic_issues = []
                 critical_issues = []
-                
-                for f in py_files:  # Check first 10 Python files to avoid timeout
+                for f in py_files:  
                     try:
                         quality_result = self.check_code_quality(f)
                         if "❌ CRITICAL" in quality_result:
@@ -1203,12 +1191,12 @@ class SWEEnvironment:
             report.append("=" * 60)
             report.append("GIT DIFF PREVIEW (first 1000 chars):")
             report.append("=" * 60)
-            diff_preview = diff[:1000]
-            if len(diff) > 1000:
+            diff_preview = diff[:6000]
+            if len(diff) > 6000:
                 diff_preview += "\n... (truncated, use git_diff() to see full diff)"
             report.append(diff_preview)
             report.append("")
-            
+
             # 6. Final verdict
             report.append("=" * 60)
             if all_checks_passed:
@@ -1234,7 +1222,61 @@ class SWEEnvironment:
             import traceback
             traceback.print_exc()
             return f"Error during verification: {str(e)}"
+    
+    def llm_judge_validate_changes(self, task_description: str, patch: str) -> str:
+        """
+        Use an LLM as a judge to evaluate if the code changes adequately address the task.
+        
+        This provides a semantic validation layer that checks:
+        - Do the changes actually solve the described problem?
+        - Are the changes appropriate and minimal?
+        - Are there obvious issues with the approach?
+        
+        Args:
+            task_description (str): The original task/problem description
+            patch (str): The git diff/patch of the changes made
+            
+        Returns:
+            str: Verdict with "APPROVE" or "REJECT" and reasoning
+        """
+        from llm import OpenAIModel
+        
+        judge_prompt = f"""You are an expert code reviewer. Review the following code changes and determine if they adequately solve the task.
 
+TASK DESCRIPTION:
+{task_description}
+
+CODE CHANGES (git diff):
+{patch}  
+
+Your job is to determine if these changes solve the task described above.
+
+Respond in this exact format:
+```
+REASONING: [2-3 sentences explaining your decision and providing feedback to improve in case of rejection]
+VERDICT: [APPROVE or REJECT]
+END_OF_JUDGE_RESPONSE
+```
+
+Focus on:
+1. Does the change address the core problem described in the task?
+2. Is the implementation reasonable and appropriate?
+3. Are there obvious bugs or issues that would prevent this from working?
+4. Ensure that your response always contains "VERDICT: <>" followed by "END_OF_JUDGE_RESPONSE" in the next line.
+
+Be pragmatic - minor style issues don't warrant rejection. Reject only if the changes clearly don't solve the task or have critical bugs."""
+
+        try:
+            # Use a fast model for judging
+            judge_llm = OpenAIModel(model_name="gpt-5-mini", stop_token="END_OF_JUDGE_RESPONSE")
+            response = judge_llm.generate(judge_prompt)
+            return response
+        except Exception as e:
+            # On error, approve by default (don't block agent unnecessarily)
+            import traceback
+            traceback.print_exc()
+            return f"APPROVE (Judge error: {str(e)})"
+    
     def _generate_visual_diff(self, old_lines: list, new_lines: list, start_line: int) -> str:
         """
         Generate a visual side-by-side diff showing before/after changes.

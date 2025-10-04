@@ -161,41 +161,7 @@ After EVERY replace_in_file or find_and_replace_text call:
 NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
 If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
 
-SEMANTIC ERROR PREVENTION (CRITICAL):
-Syntax checks DON'T catch runtime errors! These cause test failures even with valid syntax.
-
-BEFORE deleting or modifying ANY lines, check they don't contain:
-1. ✗ Variable definitions used later
-2. ✗ Import statements needed elsewhere
-3. ✗ Function/class definitions  
-4. ✗ Critical initialization code
-
-If deleting such lines, you MUST replace them inline or the code WILL break at runtime!
-
-EXAMPLE OF DANGEROUS EDIT (causes NameError):
-❌ BAD - Deletes variable definition:
-```python
-  for middleware_path in reversed(settings.MIDDLEWARE):
--     middleware = import_string(middleware_path)  # ← DELETED!
--     middleware_can_sync = getattr(middleware, 'sync_capable', True)  # ← DELETED!
-      middleware_can_async = getattr(middleware, 'async_capable', False)  # ← Uses undefined 'middleware'!
-```
-This WILL fail with: NameError: name 'middleware' is not defined
-
-✅ GOOD - Preserves variable definitions:
-```python
-  for middleware_path in reversed(settings.MIDDLEWARE):
-      middleware = import_string(middleware_path)  # ← KEPT
-      middleware_can_sync = getattr(middleware, 'sync_capable', True)  # ← KEPT
-      middleware_can_async = getattr(middleware, 'async_capable', False)  # ← Uses defined variable
-```
-
-MANDATORY CHECKS before editing:
-1. If deleting lines with `= ` (assignments), verify the variable isn't used later
-2. If deleting `import` or `from`, verify nothing uses those imports
-3. If deleting `def` or `class`, verify it's not called elsewhere
-4. After editing, the tool will warn you if you deleted dangerous code patterns
-5. verify_before_finish() now includes semantic analysis to catch these errors
+CRITICAL: Before deleting lines, verify they don't contain variable definitions, imports, or function/class definitions that are used elsewhere. Deleting such lines causes runtime errors even if syntax is valid.
 
 Efficiency tips:
 - Aim for 5–15 steps for most tasks
@@ -344,7 +310,7 @@ class ReactAgent:
     - Runs a Reason-Act loop until `finish` is called or MAX_STEPS is reached
     """
 
-    def __init__(self, name: str, parser: ResponseParser, llm: LLM, instance_id: str = 'default', output_dir: str = 'default'):
+    def __init__(self, name: str, parser: ResponseParser, llm: LLM, instance_id: str = 'default', output_dir: str = 'default', verify_code_quality_fn: Callable = None, llm_as_judge_fn: Callable = None):
         self.name: str = name
         self.parser = parser
         self.llm = llm
@@ -378,6 +344,10 @@ class ReactAgent:
 
         self.output_dir = output_dir
         self.instance_id = instance_id
+
+        self.verify_code_quality_fn = verify_code_quality_fn
+        self.llm_as_judge_fn = llm_as_judge_fn
+        self.llm_as_judge_invoked = False
 
     # -------------------- MESSAGE TREE --------------------
     def add_message(self, role: str, content: str) -> int:
@@ -711,14 +681,19 @@ Take a different approach now. Make a simple, safe action."""
                         # If finish was called, run verification first
                         if function_name == "finish":
                             # Step 1: Run verify_before_finish to do comprehensive checks
-                            verify_func = self.function_map.get("verify_before_finish")
+                            # This includes: code changes check, test file check, syntax check, semantic analysis, diff preview
+                            verify_func = self.verify_code_quality_fn
                             if verify_func:
                                 try:
                                     verification_result = verify_func()
                                     
-                                    # Only add message if verification failed
+                                    # Check if verification failed (any check marked with ❌)
                                     if "❌" in verification_result or "VERIFICATION FAILED" in verification_result:
-                                        self.add_message("tool", f"Pre-finish verification failed:\n{verification_result}")
+                                        error_msg = (
+                                            "Cannot finish() - verification checks failed. Fix the issues below:\n\n"
+                                            + verification_result
+                                        )
+                                        self.add_message("tool", error_msg)
                                         continue
                                     # If verification passed, don't add any message - just proceed
                                 except Exception as e:
@@ -753,6 +728,40 @@ Take a different approach now. Make a simple, safe action."""
                                 self.add_message("tool", error_msg)
                                 continue
 
+                            # Step 4: LLM-as-judge validation - check if changes actually solve the task
+                            if self.llm_as_judge_fn and (not self.llm_as_judge_invoked):
+                                self.llm_as_judge_invoked = True
+                                try:
+                                    # Get the task description
+                                    task_description = self.id_to_message[self.user_message_id]["content"]
+                                    
+                                    # oo already contains the patch from step 2
+                                    judge_verdict = self.llm_as_judge_fn(task_description, oo)
+                                    
+                                    # Parse judge response
+                                    # Expected format: verdict should contain "APPROVE" or "REJECT" with reasoning
+                                    if "REJECT" in judge_verdict or "❌" in judge_verdict:
+                                        error_msg = (
+                                            "LLM Judge Review - Changes do NOT adequately address the task:\n\n"
+                                            + judge_verdict + "\n\n"
+                                            + "Please review the feedback and make necessary corrections before calling finish() again."
+                                        )
+                                        self.add_message("tool", error_msg)
+                                        continue
+                                    elif "APPROVE" in judge_verdict or "✅" in judge_verdict:
+                                        # Judge approved - log but don't show to agent (adds noise)
+                                        print(f"[LLM Judge] Changes approved for {self.instance_id}")
+                                    else:
+                                        # Unclear response - Show the judge response to the agent
+                                        self.add_message("tool", judge_verdict)
+                                        continue
+                                        
+                                except Exception as e:
+                                    import traceback
+                                    traceback.print_exc()
+                                    print(f"[LLM Judge] Error during validation: {str(e)}")
+                                    # Don't block on judge errors - let the agent proceed
+                            
                             return result
 
                         # Add tool result to tree
