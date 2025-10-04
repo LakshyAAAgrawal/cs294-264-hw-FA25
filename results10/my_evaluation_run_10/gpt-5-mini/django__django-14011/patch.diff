@@ -1,0 +1,59 @@
+diff --git a/tests/test_helpers/closing_live_server.py b/tests/test_helpers/closing_live_server.py
+new file mode 100644
+index 0000000000..8ea3c97bf3
+--- /dev/null
++++ b/tests/test_helpers/closing_live_server.py
+@@ -0,0 +1,53 @@
++"""Test helper to avoid leaking DB connections from ThreadedWSGIServer used by LiveServerTestCase.
++
++This mirrors the minimal workaround used in Django ticket #32416: ensure that database
++connections opened by per-request threads are closed when the request finishes,
++preventing intermittent "database ... is being accessed by other users" errors during
++test database teardown.
++
++Usage:
++    from tests.test_helpers.closing_live_server import ClosingLiveServerThread
++    from django.test import LiveServerTestCase
++
++    class MyLiveServerTest(LiveServerTestCase):
++        server_thread_class = ClosingLiveServerThread
++"""
++from django.core.servers.basehttp import ThreadedWSGIServer, QuietWSGIRequestHandler
++from django.test.testcases import LiveServerThread
++from django.db import connections
++
++
++class ClosingThreadedWSGIServer(ThreadedWSGIServer):
++    """
++    Subclass of ThreadedWSGIServer that ensures Django DB connections opened by the
++    worker thread are closed when the request is cleaned up.
++    """
++
++    def close_request(self, request, client_address):
++        # Close any DB connections that may have been opened by this thread/request.
++        # Doing this here mirrors the cleanup Django normally performs in the single-threaded
++        # server code path and prevents test DB teardown races.
++        try:
++            connections.close_all()
++        except Exception:
++            # Be conservative: don't let connection-close failures break server shutdown.
++            # Tests will surface database errors if they persist.
++            pass
++        # Call the parent implementation to finish the normal request cleanup.
++        return super().close_request(request, client_address)
++
++
++class ClosingLiveServerThread(LiveServerThread):
++    """
++    LiveServerThread that creates a ClosingThreadedWSGIServer instance.
++    Use this as your LiveServerTestCase.server_thread_class to avoid leaking DB connections.
++    """
++
++    def _create_server(self):
++        # allow_reuse_address=False matches Django's default for test servers
++        return ClosingThreadedWSGIServer(
++            (self.host, self.port), QuietWSGIRequestHandler, allow_reuse_address=False
++        )
++
++
++__all__ = ["ClosingThreadedWSGIServer", "ClosingLiveServerThread"]
