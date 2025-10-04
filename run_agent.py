@@ -61,11 +61,11 @@ def process_instance(
             env.set_file_content,
             env.regex_replace_in_file,
             env.generate_patch,
-            env.get_file_content,
-            env.set_file_content,
-            env.regex_replace_in_file,
             env.insert_lines_at,
             env.delete_lines,
+            env.git_diff,
+            env.check_syntax,
+            env.validate_patch,
         ])
         
         # Run the agent

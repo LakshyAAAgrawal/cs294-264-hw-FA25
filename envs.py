@@ -397,6 +397,72 @@ class SWEEnvironment:
                     return f"✗ Syntax error in {file_path}:\n{result['output']}"
             except Exception as e2:
                 return f"Could not check syntax: {str(e)}"
+    
+    def validate_patch(self) -> str:
+        """
+        CRITICAL: Call this before finish() to validate that:
+        1. You made actual code changes (git diff is not empty)
+        2. The patch can be generated successfully
+        3. There are no obvious formatting issues
+        
+        This helps prevent common failures like:
+        - Finishing without making changes
+        - Creating malformed patches with bad indentation
+        - Patches that can't be applied
+        
+        Returns:
+            Validation result with warnings or confirmation that patch is valid
+        """
+        try:
+            # Check if there are any changes
+            diff_result = self.env.execute("git diff")
+            diff_output = diff_result['output'].strip() if diff_result['output'] else ""
+            
+            if not diff_output:
+                return "❌ VALIDATION FAILED: No changes detected! You haven't modified any files. You MUST make code changes before calling finish()."
+            
+            # Check if we can generate a patch
+            try:
+                patch_result = self.env.execute("git add -A && git diff --cached")
+                patch_output = patch_result['output'].strip() if patch_result['output'] else ""
+                
+                if not patch_output:
+                    return "❌ VALIDATION FAILED: Could not generate patch. Changes might not be staged properly."
+                
+                # Basic validation: check for common patch issues
+                warnings = []
+                
+                # Check for suspicious indentation patterns in the patch
+                for line in patch_output.split('\n'):
+                    if line.startswith('+') and '\t' in line and '    ' in line:
+                        warnings.append("⚠️  WARNING: Mixed tabs and spaces detected in added lines")
+                        break
+                
+                # Check patch size
+                added_lines = sum(1 for line in patch_output.split('\n') if line.startswith('+'))
+                removed_lines = sum(1 for line in patch_output.split('\n') if line.startswith('-'))
+                
+                if added_lines > 500 or removed_lines > 500:
+                    warnings.append(f"⚠️  WARNING: Large patch ({added_lines} added, {removed_lines} removed lines). Ensure changes are focused.")
+                
+                # Check for incomplete patches (common sign of truncation)
+                if not patch_output.endswith('\n'):
+                    warnings.append("⚠️  WARNING: Patch doesn't end with newline - might be truncated")
+                
+                result_msg = f"✓ VALIDATION PASSED: Patch generated successfully\n"
+                result_msg += f"  - {added_lines} lines added, {removed_lines} lines removed\n"
+                result_msg += f"  - Patch size: {len(patch_output)} characters\n"
+                
+                if warnings:
+                    result_msg += "\n" + "\n".join(warnings) + "\n"
+                
+                return result_msg
+                
+            except Exception as e:
+                return f"❌ VALIDATION FAILED: Error generating patch: {str(e)}"
+                
+        except Exception as e:
+            return f"❌ VALIDATION FAILED: Error checking changes: {str(e)}"
 
 class DumbEnvironment:
     """
