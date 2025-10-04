@@ -1,0 +1,2081 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+SEMANTIC ERROR PREVENTION (CRITICAL):
+Syntax checks DON'T catch runtime errors! These cause test failures even with valid syntax.
+
+BEFORE deleting or modifying ANY lines, check they don't contain:
+1. ✗ Variable definitions used later
+2. ✗ Import statements needed elsewhere
+3. ✗ Function/class definitions  
+4. ✗ Critical initialization code
+
+If deleting such lines, you MUST replace them inline or the code WILL break at runtime!
+
+EXAMPLE OF DANGEROUS EDIT (causes NameError):
+❌ BAD - Deletes variable definition:
+```python
+  for middleware_path in reversed(settings.MIDDLEWARE):
+-     middleware = import_string(middleware_path)  # ← DELETED!
+-     middleware_can_sync = getattr(middleware, 'sync_capable', True)  # ← DELETED!
+      middleware_can_async = getattr(middleware, 'async_capable', False)  # ← Uses undefined 'middleware'!
+```
+This WILL fail with: NameError: name 'middleware' is not defined
+
+✅ GOOD - Preserves variable definitions:
+```python
+  for middleware_path in reversed(settings.MIDDLEWARE):
+      middleware = import_string(middleware_path)  # ← KEPT
+      middleware_can_sync = getattr(middleware, 'sync_capable', True)  # ← KEPT
+      middleware_can_async = getattr(middleware, 'async_capable', False)  # ← Uses defined variable
+```
+
+MANDATORY CHECKS before editing:
+1. If deleting lines with `= ` (assignments), verify the variable isn't used later
+2. If deleting `import` or `from`, verify nothing uses those imports
+3. If deleting `def` or `class`, verify it's not called elsewhere
+4. After editing, the tool will warn you if you deleted dangerous code patterns
+5. verify_before_finish() now includes semantic analysis to catch these errors
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: check_code_quality(file_path: str) -> str
+Run static analysis on a Python file to catch semantic errors.
+Uses pyflakes to detect undefined names, unused imports, etc.
+
+This catches errors that syntax checking misses, such as:
+- Undefined variables (NameError)
+- Unused imports
+- Undefined names in function calls
+- Redefined functions
+
+Args:
+    file_path (str): path to the Python file to check
+    
+Returns:
+    Report of issues found or success message
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Runs semantic analysis (checks for undefined variables, missing imports, etc.)
+5. Shows git diff preview of all changes
+6. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+SECRET_KEY_FALLBACKS is not used for sessions
+Description
+	
+I recently rotated my secret key, made the old one available in SECRET_KEY_FALLBACKS and I'm pretty sure everyone on our site is logged out now.
+I think the docs for ​SECRET_KEY_FALLBACKS may be incorrect when stating the following:
+In order to rotate your secret keys, set a new SECRET_KEY and move the previous value to the beginning of SECRET_KEY_FALLBACKS. Then remove the old values from the end of the SECRET_KEY_FALLBACKS when you are ready to expire the sessions, password reset tokens, and so on, that make use of them.
+When looking at the Django source code, I see that the ​salted_hmac function uses the SECRET_KEY by default and the ​AbstractBaseUser.get_session_auth_hash method does not call salted_hmac with a value for the secret keyword argument.
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll search the repository for SECRET_KEY_FALLBACKS, salted_hmac, and get_session_auth_hash to locate the relevant implementations and confirm whether fallbacks are used for session-related hashes.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+SECRET_KEY_FALLBACKS|salted_hmac|get_session_auth_hash
+----ARG----
+directory
+.
+----ARG----
+use_regex
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll list the top-level files to find the Django code or vendor modules where SECRET_KEY_FALLBACKS, salted_hmac, and get_session_auth_hash might be implemented. 
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+total 192
+drwxrwxrwx   1 root root  4096 Sep 10 13:33 .
+drwxr-xr-x   1 root root  4096 Oct  4 20:48 ..
+-rw-r--r--   1 root root   806 Sep 10 13:25 .editorconfig
+-rw-r--r--   1 root root   148 Sep 10 13:25 .eslintignore
+-rw-r--r--   1 root root  1407 Sep 10 13:25 .eslintrc
+drwxrwxrwx   8 root root  4096 Sep 10 13:33 .git
+-rw-r--r--   1 root root   369 Sep 10 13:25 .git-blame-ignore-revs
+-rw-r--r--   1 root root   297 Sep 10 13:25 .gitattributes
+drwxrwxrwx   3 root root  4096 Sep 10 13:25 .github
+-rw-r--r--   1 root root   354 Sep 10 13:25 .gitignore
+-rw-r--r--   1 root root   551 Sep 10 13:25 .pre-commit-config.yaml
+-rw-r--r--   1 root root   385 Sep 10 13:25 .readthedocs.yml
+drwxrwxrwx   2 root root  4096 Sep 10 13:25 .tx
+-rw-r--r--   1 root root 41332 Sep 10 13:25 AUTHORS
+-rw-r--r--   1 root root  1115 Sep 10 13:25 CONTRIBUTING.rst
+drwxr-xr-x   2 root root  4096 Sep 10 13:33 Django.egg-info
+-rw-r--r--   1 root root   369 Sep 10 13:25 Gruntfile.js
+-rw-r--r--   1 root root   237 Sep 10 13:25 INSTALL
+-rw-r--r--   1 root root  1552 Sep 10 13:25 LICENSE
+-rw-r--r--   1 root root 14383 Sep 10 13:25 LICENSE.python
+-rw-r--r--   1 root root   292 Sep 10 13:25 MANIFEST.in
+-rw-r--r--   1 root root  2122 Sep 10 13:25 README.rst
+drwxrwxrwx  18 root root  4096 Sep 10 13:33 django
+drwxrwxrwx  13 root root  4096 Sep 10 13:25 docs
+drwxrwxrwx   2 root root  4096 Sep 10 13:25 extras
+drwxrwxrwx   4 root root  4096 Sep 10 13:25 js_tests
+-rw-r--r--   1 root root   356 Sep 10 13:25 package.json
+-rw-r--r--   1 root root   199 Sep 10 13:25 pyproject.toml
+drwxrwxrwx   2 root root  4096 Sep 10 13:25 scripts
+-rw-r--r--   1 root root  2191 Sep 10 13:25 setup.cfg
+-rw-r--r--   1 root root  1633 Sep 10 13:25 setup.py
+drwxrwxrwx 214 root root 12288 Sep 10 13:25 tests
+-rw-r--r--   1 root root  1875 Sep 10 13:25 tox.ini
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll search the repository for explicit references to SECRET_KEY_FALLBACKS to locate where (if anywhere) it's used. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+SECRET_KEY_FALLBACKS
+----ARG----
+directory
+.
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+./tests/signing/tests.py:199:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/signing/tests.py:210:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/auth_tests/test_tokens.py:156:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/auth_tests/test_tokens.py:168:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/view_tests/tests/test_debug.py:1685:            "SECRET_KEY_FALLBACKS",
+./tests/view_tests/tests/test_debug.py:1704:            "SECRET_KEY_FALLBACKS",
+./tests/settings_tests/tests.py:480:        "SECRET_KEY_FALLBACKS",
+./tests/check_framework/test_security.py:452:    @override_settings(SECRET_KEY_FALLBACKS=[("abcdefghijklmnopqrstuvwx" * 2) + "ab"])
+./tests/check_framework/test_security.py:455:            len(settings.SECRET_KEY_FALLBACKS[0]),
+./tests/check_framework/test_security.py:459:            len(set(settings.SECRET_KEY_FALLBACKS[0])),
+./tests/check_framework/test_security.py:465:        with self.settings(SECRET_KEY_FALLBACKS=None):
+./tests/check_framework/test_security.py:466:            del settings.SECRET_KEY_FALLBACKS
+./tests/check_framework/test_security.py:470:                    Warning(base.W025.msg % "SECRET_KEY_FALLBACKS", id=base.W025.id),
+./tests/check_framework/test_security.py:475:        SECRET_KEY_FALLBACKS=[base.SECRET_KEY_INSECURE_PREFIX + get_random_secret_key()]
+./tests/check_framework/test_security.py:481:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[0]", id=base.W025.id),
+./tests/check_framework/test_security.py:485:    @override_settings(SECRET_KEY_FALLBACKS=[("abcdefghijklmnopqrstuvwx" * 2) + "a"])
+./tests/check_framework/test_security.py:488:            len(settings.SECRET_KEY_FALLBACKS[0]),
+./tests/check_framework/test_security.py:494:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[0]", id=base.W025.id),
+./tests/check_framework/test_security.py:498:    @override_settings(SECRET_KEY_FALLBACKS=["abcd" * 20])
+./tests/check_framework/test_security.py:501:            len(settings.SECRET_KEY_FALLBACKS[0]),
+./tests/check_framework/test_security.py:505:            len(set(settings.SECRET_KEY_FALLBACKS[0])),
+./tests/check_framework/test_security.py:511:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[0]", id=base.W025.id),
+./tests/check_framework/test_security.py:516:        SECRET_KEY_FALLBACKS=[
+./tests/check_framework/test_security.py:525:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[1]", id=base.W025.id),
+./tests/check_framework/test_security.py:530:        SECRET_KEY_FALLBACKS=[
+./tests/check_framework/test_security.py:540:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[1]", id=base.W025.id),
+./tests/check_framework/test_security.py:541:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[2]", id=base.W025.id),
+./django/core/checks/security/base.py:230:        fallbacks = settings.SECRET_KEY_FALLBACKS
+./django/core/checks/security/base.py:232:        warnings.append(Warning(W025.msg % "SECRET_KEY_FALLBACKS", id=W025.id))
+./django/core/checks/security/base.py:237:                    Warning(W025.msg % f"SECRET_KEY_FALLBACKS[{index}]", id=W025.id)
+./django/core/signing.py:115:        fallback_keys=map(_cookie_signer_key, settings.SECRET_KEY_FALLBACKS),
+./django/core/signing.py:197:            else settings.SECRET_KEY_FALLBACKS
+./django/contrib/auth/tokens.py:32:            return settings.SECRET_KEY_FALLBACKS
+./django/conf/global_settings.py:268:SECRET_KEY_FALLBACKS = []
+./django/conf/__init__.py:192:            "SECRET_KEY_FALLBACKS",
+./docs/ref/checks.txt:525:  :setting:`SECRET_KEY_FALLBACKS[n] <SECRET_KEY_FALLBACKS>` has less than 50
+./docs/ref/settings.txt:2283::setting:`SECRET_KEY_FALLBACKS` all of the above will be invalidated. When
+./docs/ref/settings.txt:2285::setting:`SECRET_KEY_FALLBACKS` temporarily. Secret keys are not used for
+./docs/ref/settings.txt:2294:.. setting:: SECRET_KEY_FALLBACKS
+./docs/ref/settings.txt:2296:``SECRET_KEY_FALLBACKS``
+./docs/ref/settings.txt:2305:previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+./docs/ref/settings.txt:2306:old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+./docs/ref/settings.txt:2312:    values in ``SECRET_KEY_FALLBACKS`` adds additional overhead to all checks
+./docs/ref/settings.txt:3761:* :setting:`SECRET_KEY_FALLBACKS`
+./docs/howto/deployment/checklist.txt:63:If rotating secret keys, you may use :setting:`SECRET_KEY_FALLBACKS`::
+./docs/howto/deployment/checklist.txt:68:    SECRET_KEY_FALLBACKS = [
+./docs/howto/deployment/checklist.txt:72:Ensure that old secret keys are removed from ``SECRET_KEY_FALLBACKS`` in a
+./docs/topics/signing.txt:28:Protecting ``SECRET_KEY`` and ``SECRET_KEY_FALLBACKS``
+./docs/topics/signing.txt:37::setting:`SECRET_KEY_FALLBACKS` can be used to rotate secret keys. The
+./docs/topics/signing.txt:121:    :setting:`SECRET_KEY_FALLBACKS`.
+./docs/topics/security.txt:295:* Keep your :setting:`SECRET_KEY`, and :setting:`SECRET_KEY_FALLBACKS` if in
+./docs/topics/auth/default.txt:964:    use a new secret. See :setting:`SECRET_KEY_FALLBACKS` for details.
+./docs/topics/http/sessions.txt:329::setting:`SECRET_KEY_FALLBACKS`) is known by an attacker (there isn't an
+./docs/releases/4.1.txt:374:* The new :setting:`SECRET_KEY_FALLBACKS` setting allows providing a list of
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I'll inspect django/core/signing.py to see how SECRET_KEY_FALLBACKS and fallback_keys are used by signers (to confirm whether sessions use fallback keys). 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/signing.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+260
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+     1  """
+     2  Functions for creating and restoring url-safe signed JSON objects.
+        
+     3  The format used looks like this:
+        
+     4  >>> signing.dumps("hello")
+     5  'ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv422nZA4sgmk'
+        
+     6  There are two components here, separated by a ':'. The first component is a
+     7  URLsafe base64 encoded JSON of the object passed to dumps(). The second
+     8  component is a base64 encoded hmac/SHA-256 hash of "$first_component:$secret"
+        
+     9  signing.loads(s) checks the signature and returns the deserialized object.
+    10  If the signature fails, a BadSignature exception is raised.
+        
+    11  >>> signing.loads("ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv422nZA4sgmk")
+    12  'hello'
+    13  >>> signing.loads("ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv42-modified")
+    14  ...
+    15  BadSignature: Signature "ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv42-modified" does not match
+        
+    16  You can optionally compress the JSON prior to base64 encoding it to save
+    17  space, using the compress=True argument. This checks if compression actually
+    18  helps and only applies compression if the result is a shorter string:
+        
+    19  >>> signing.dumps(list(range(1, 20)), compress=True)
+    20  '.eJwFwcERACAIwLCF-rCiILN47r-GyZVJsNgkxaFxoDgxcOHGxMKD_T7vhAml:1QaUaL:BA0thEZrp4FQVXIXuOvYJtLJSrQ'
+        
+    21  The fact that the string is compressed is signalled by the prefixed '.' at the
+    22  start of the base64 JSON.
+        
+    23  There are 65 url-safe characters: the 64 used by url-safe base64 and the ':'.
+    24  These functions make use of all of them.
+    25  """
+        
+    26  import base64
+    27  import datetime
+    28  import json
+    29  import time
+    30  import warnings
+    31  import zlib
+        
+    32  from django.conf import settings
+    33  from django.utils.crypto import constant_time_compare, salted_hmac
+    34  from django.utils.deprecation import RemovedInDjango51Warning
+    35  from django.utils.encoding import force_bytes
+    36  from django.utils.module_loading import import_string
+    37  from django.utils.regex_helper import _lazy_re_compile
+        
+    38  _SEP_UNSAFE = _lazy_re_compile(r"^[A-z0-9-_=]*$")
+    39  BASE62_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        
+        
+    40  class BadSignature(Exception):
+    41      """Signature does not match."""
+        
+    42      pass
+        
+        
+    43  class SignatureExpired(BadSignature):
+    44      """Signature timestamp is older than required max_age."""
+        
+    45      pass
+        
+        
+    46  def b62_encode(s):
+    47      if s == 0:
+    48          return "0"
+    49      sign = "-" if s < 0 else ""
+    50      s = abs(s)
+    51      encoded = ""
+    52      while s > 0:
+    53          s, remainder = divmod(s, 62)
+    54          encoded = BASE62_ALPHABET[remainder] + encoded
+    55      return sign + encoded
+        
+        
+    56  def b62_decode(s):
+    57      if s == "0":
+    58          return 0
+    59      sign = 1
+    60      if s[0] == "-":
+    61          s = s[1:]
+    62          sign = -1
+    63      decoded = 0
+    64      for digit in s:
+    65          decoded = decoded * 62 + BASE62_ALPHABET.index(digit)
+    66      return sign * decoded
+        
+        
+    67  def b64_encode(s):
+    68      return base64.urlsafe_b64encode(s).strip(b"=")
+        
+        
+    69  def b64_decode(s):
+    70      pad = b"=" * (-len(s) % 4)
+    71      return base64.urlsafe_b64decode(s + pad)
+        
+        
+    72  def base64_hmac(salt, value, key, algorithm="sha1"):
+    73      return b64_encode(
+    74          salted_hmac(salt, value, key, algorithm=algorithm).digest()
+    75      ).decode()
+        
+        
+    76  def _cookie_signer_key(key):
+    77      # SECRET_KEYS items may be str or bytes.
+    78      return b"django.http.cookies" + force_bytes(key)
+        
+        
+    79  def get_cookie_signer(salt="django.core.signing.get_cookie_signer"):
+    80      Signer = import_string(settings.SIGNING_BACKEND)
+    81      return Signer(
+    82          key=_cookie_signer_key(settings.SECRET_KEY),
+    83          fallback_keys=map(_cookie_signer_key, settings.SECRET_KEY_FALLBACKS),
+    84          salt=salt,
+    85      )
+        
+        
+    86  class JSONSerializer:
+    87      """
+    88      Simple wrapper around json to be used in signing.dumps and
+    89      signing.loads.
+    90      """
+        
+    91      def dumps(self, obj):
+    92          return json.dumps(obj, separators=(",", ":")).encode("latin-1")
+        
+    93      def loads(self, data):
+    94          return json.loads(data.decode("latin-1"))
+        
+        
+    95  def dumps(
+    96      obj, key=None, salt="django.core.signing", serializer=JSONSerializer, compress=False
+    97  ):
+    98      """
+    99      Return URL-safe, hmac signed base64 compressed JSON string. If key is
+   100      None, use settings.SECRET_KEY instead. The hmac algorithm is the default
+   101      Signer algorithm.
+        
+   102      If compress is True (not the default), check if compressing using zlib can
+   103      save some space. Prepend a '.' to signify compression. This is included
+   104      in the signature, to protect against zip bombs.
+        
+   105      Salt can be used to namespace the hash, so that a signed string is
+   106      only valid for a given namespace. Leaving this at the default
+   107      value or re-using a salt value across different parts of your
+   108      application without good cause is a security risk.
+        
+   109      The serializer is expected to return a bytestring.
+   110      """
+   111      return TimestampSigner(key=key, salt=salt).sign_object(
+   112          obj, serializer=serializer, compress=compress
+   113      )
+        
+        
+   114  def loads(
+   115      s,
+   116      key=None,
+   117      salt="django.core.signing",
+   118      serializer=JSONSerializer,
+   119      max_age=None,
+   120      fallback_keys=None,
+   121  ):
+   122      """
+   123      Reverse of dumps(), raise BadSignature if signature fails.
+        
+   124      The serializer is expected to accept a bytestring.
+   125      """
+   126      return TimestampSigner(
+   127          key=key, salt=salt, fallback_keys=fallback_keys
+   128      ).unsign_object(
+   129          s,
+   130          serializer=serializer,
+   131          max_age=max_age,
+   132      )
+        
+        
+   133  class Signer:
+   134      # RemovedInDjango51Warning: When the deprecation ends, replace with:
+   135      # def __init__(
+   136      #   self, *, key=None, sep=":", salt=None, algorithm=None, fallback_keys=None
+   137      # ):
+   138      def __init__(
+   139          self,
+   140          *args,
+   141          key=None,
+   142          sep=":",
+   143          salt=None,
+   144          algorithm=None,
+   145          fallback_keys=None,
+   146      ):
+   147          self.key = key or settings.SECRET_KEY
+   148          self.fallback_keys = (
+   149              fallback_keys
+   150              if fallback_keys is not None
+   151              else settings.SECRET_KEY_FALLBACKS
+   152          )
+   153          self.sep = sep
+   154          self.salt = salt or "%s.%s" % (
+   155              self.__class__.__module__,
+   156              self.__class__.__name__,
+   157          )
+   158          self.algorithm = algorithm or "sha256"
+   159          # RemovedInDjango51Warning.
+   160          if args:
+   161              warnings.warn(
+   162                  f"Passing positional arguments to {self.__class__.__name__} is "
+   163                  f"deprecated.",
+   164                  RemovedInDjango51Warning,
+   165                  stacklevel=2,
+   166              )
+   167              for arg, attr in zip(
+   168                  args, ["key", "sep", "salt", "algorithm", "fallback_keys"]
+   169              ):
+   170                  if arg or attr == "sep":
+   171                      setattr(self, attr, arg)
+   172          if _SEP_UNSAFE.match(self.sep):
+   173              raise ValueError(
+   174                  "Unsafe Signer separator: %r (cannot be empty or consist of "
+   175                  "only A-z0-9-_=)" % sep,
+   176              )
+        
+   177      def signature(self, value, key=None):
+   178          key = key or self.key
+   179          return base64_hmac(self.salt + "signer", value, key, algorithm=self.algorithm)
+        
+   180      def sign(self, value):
+   181          return "%s%s%s" % (value, self.sep, self.signature(value))
+        
+   182      def unsign(self, signed_value):
+   183          if self.sep not in signed_value:
+   184              raise BadSignature('No "%s" found in value' % self.sep)
+   185          value, sig = signed_value.rsplit(self.sep, 1)
+   186          for key in [self.key, *self.fallback_keys]:
+   187              if constant_time_compare(sig, self.signature(value, key)):
+   188                  return value
+   189          raise BadSignature('Signature "%s" does not match' % sig)
+        
+   190      def sign_object(self, obj, serializer=JSONSerializer, compress=False):
+   191          """
+   192          Return URL-safe, hmac signed base64 compressed JSON string.
+        
+   193          If compress is True (not the default), check if compressing using zlib
+   194          can save some space. Prepend a '.' to signify compression. This is
+   195          included in the signature, to protect against zip bombs.
+        
+   196          The serializer is expected to return a bytestring.
+   197          """
+   198          data = serializer().dumps(obj)
+   199          # Flag for if it's been compressed or not.
+   200          is_compressed = False
+        
+   201          if compress:
+   202              # Avoid zlib dependency unless compress is being used.
+   203              compressed = zlib.compress(data)
+   204              if len(compressed) < (len(data) - 1):
+   205                  data = compressed
+   206                  is_compressed = True
+   207          base64d = b64_encode(data).decode()
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll locate the definitions of get_session_auth_hash and salted_hmac to confirm which secret key(s) they use when computing session-related hashes. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def get_session_auth_hash|def salted_hmac
+----ARG----
+directory
+.
+----ARG----
+use_regex
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I will open the Django auth models file to inspect AbstractBaseUser and its get_session_auth_hash-related methods. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/models.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+     1  from django.apps import apps
+     2  from django.contrib import auth
+     3  from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+     4  from django.contrib.auth.hashers import make_password
+     5  from django.contrib.contenttypes.models import ContentType
+     6  from django.core.exceptions import PermissionDenied
+     7  from django.core.mail import send_mail
+     8  from django.db import models
+     9  from django.db.models.manager import EmptyManager
+    10  from django.utils import timezone
+    11  from django.utils.itercompat import is_iterable
+    12  from django.utils.translation import gettext_lazy as _
+        
+    13  from .validators import UnicodeUsernameValidator
+        
+        
+    14  def update_last_login(sender, user, **kwargs):
+    15      """
+    16      A signal receiver which updates the last_login date for
+    17      the user logging in.
+    18      """
+    19      user.last_login = timezone.now()
+    20      user.save(update_fields=["last_login"])
+        
+        
+    21  class PermissionManager(models.Manager):
+    22      use_in_migrations = True
+        
+    23      def get_by_natural_key(self, codename, app_label, model):
+    24          return self.get(
+    25              codename=codename,
+    26              content_type=ContentType.objects.db_manager(self.db).get_by_natural_key(
+    27                  app_label, model
+    28              ),
+    29          )
+        
+        
+    30  class Permission(models.Model):
+    31      """
+    32      The permissions system provides a way to assign permissions to specific
+    33      users and groups of users.
+        
+    34      The permission system is used by the Django admin site, but may also be
+    35      useful in your own code. The Django admin site uses permissions as follows:
+        
+    36          - The "add" permission limits the user's ability to view the "add" form
+    37            and add an object.
+    38          - The "change" permission limits a user's ability to view the change
+    39            list, view the "change" form and change an object.
+    40          - The "delete" permission limits the ability to delete an object.
+    41          - The "view" permission limits the ability to view an object.
+        
+    42      Permissions are set globally per type of object, not per specific object
+    43      instance. It is possible to say "Mary may change news stories," but it's
+    44      not currently possible to say "Mary may change news stories, but only the
+    45      ones she created herself" or "Mary may only change news stories that have a
+    46      certain status or publication date."
+        
+    47      The permissions listed above are automatically created for each model.
+    48      """
+        
+    49      name = models.CharField(_("name"), max_length=255)
+    50      content_type = models.ForeignKey(
+    51          ContentType,
+    52          models.CASCADE,
+    53          verbose_name=_("content type"),
+    54      )
+    55      codename = models.CharField(_("codename"), max_length=100)
+        
+    56      objects = PermissionManager()
+        
+    57      class Meta:
+    58          verbose_name = _("permission")
+    59          verbose_name_plural = _("permissions")
+    60          unique_together = [["content_type", "codename"]]
+    61          ordering = ["content_type__app_label", "content_type__model", "codename"]
+        
+    62      def __str__(self):
+    63          return "%s | %s" % (self.content_type, self.name)
+        
+    64      def natural_key(self):
+    65          return (self.codename,) + self.content_type.natural_key()
+        
+    66      natural_key.dependencies = ["contenttypes.contenttype"]
+        
+        
+    67  class GroupManager(models.Manager):
+    68      """
+    69      The manager for the auth's Group model.
+    70      """
+        
+    71      use_in_migrations = True
+        
+    72      def get_by_natural_key(self, name):
+    73          return self.get(name=name)
+        
+        
+    74  class Group(models.Model):
+    75      """
+    76      Groups are a generic way of categorizing users to apply permissions, or
+    77      some other label, to those users. A user can belong to any number of
+    78      groups.
+        
+    79      A user in a group automatically has all the permissions granted to that
+    80      group. For example, if the group 'Site editors' has the permission
+    81      can_edit_home_page, any user in that group will have that permission.
+        
+    82      Beyond permissions, groups are a convenient way to categorize users to
+    83      apply some label, or extended functionality, to them. For example, you
+    84      could create a group 'Special users', and you could write code that would
+    85      do special things to those users -- such as giving them access to a
+    86      members-only portion of your site, or sending them members-only email
+    87      messages.
+    88      """
+        
+    89      name = models.CharField(_("name"), max_length=150, unique=True)
+    90      permissions = models.ManyToManyField(
+    91          Permission,
+    92          verbose_name=_("permissions"),
+    93          blank=True,
+    94      )
+        
+    95      objects = GroupManager()
+        
+    96      class Meta:
+    97          verbose_name = _("group")
+    98          verbose_name_plural = _("groups")
+        
+    99      def __str__(self):
+   100          return self.name
+        
+   101      def natural_key(self):
+   102          return (self.name,)
+        
+        
+   103  class UserManager(BaseUserManager):
+   104      use_in_migrations = True
+        
+   105      def _create_user(self, username, email, password, **extra_fields):
+   106          """
+   107          Create and save a user with the given username, email, and password.
+   108          """
+   109          if not username:
+   110              raise ValueError("The given username must be set")
+   111          email = self.normalize_email(email)
+   112          # Lookup the real model class from the global app registry so this
+   113          # manager method can be used in migrations. This is fine because
+   114          # managers are by definition working on the real model.
+   115          GlobalUserModel = apps.get_model(
+   116              self.model._meta.app_label, self.model._meta.object_name
+   117          )
+   118          username = GlobalUserModel.normalize_username(username)
+   119          user = self.model(username=username, email=email, **extra_fields)
+   120          user.password = make_password(password)
+   121          user.save(using=self._db)
+   122          return user
+        
+   123      def create_user(self, username, email=None, password=None, **extra_fields):
+   124          extra_fields.setdefault("is_staff", False)
+   125          extra_fields.setdefault("is_superuser", False)
+   126          return self._create_user(username, email, password, **extra_fields)
+        
+   127      def create_superuser(self, username, email=None, password=None, **extra_fields):
+   128          extra_fields.setdefault("is_staff", True)
+   129          extra_fields.setdefault("is_superuser", True)
+        
+   130          if extra_fields.get("is_staff") is not True:
+   131              raise ValueError("Superuser must have is_staff=True.")
+   132          if extra_fields.get("is_superuser") is not True:
+   133              raise ValueError("Superuser must have is_superuser=True.")
+        
+   134          return self._create_user(username, email, password, **extra_fields)
+        
+   135      def with_perm(
+   136          self, perm, is_active=True, include_superusers=True, backend=None, obj=None
+   137      ):
+   138          if backend is None:
+   139              backends = auth._get_backends(return_tuples=True)
+   140              if len(backends) == 1:
+   141                  backend, _ = backends[0]
+   142              else:
+   143                  raise ValueError(
+   144                      "You have multiple authentication backends configured and "
+   145                      "therefore must provide the `backend` argument."
+   146                  )
+   147          elif not isinstance(backend, str):
+   148              raise TypeError(
+   149                  "backend must be a dotted import path string (got %r)." % backend
+   150              )
+   151          else:
+   152              backend = auth.load_backend(backend)
+   153          if hasattr(backend, "with_perm"):
+   154              return backend.with_perm(
+   155                  perm,
+   156                  is_active=is_active,
+   157                  include_superusers=include_superusers,
+   158                  obj=obj,
+   159              )
+   160          return self.none()
+        
+        
+   161  # A few helper functions for common logic between User and AnonymousUser.
+   162  def _user_get_permissions(user, obj, from_name):
+   163      permissions = set()
+   164      name = "get_%s_permissions" % from_name
+   165      for backend in auth.get_backends():
+   166          if hasattr(backend, name):
+   167              permissions.update(getattr(backend, name)(user, obj))
+   168      return permissions
+        
+        
+   169  def _user_has_perm(user, perm, obj):
+   170      """
+   171      A backend can raise `PermissionDenied` to short-circuit permission checking.
+   172      """
+   173      for backend in auth.get_backends():
+   174          if not hasattr(backend, "has_perm"):
+   175              continue
+   176          try:
+   177              if backend.has_perm(user, perm, obj):
+   178                  return True
+   179          except PermissionDenied:
+   180              return False
+   181      return False
+        
+        
+   182  def _user_has_module_perms(user, app_label):
+   183      """
+   184      A backend can raise `PermissionDenied` to short-circuit permission checking.
+   185      """
+   186      for backend in auth.get_backends():
+   187          if not hasattr(backend, "has_module_perms"):
+   188              continue
+   189          try:
+   190              if backend.has_module_perms(user, app_label):
+   191                  return True
+   192          except PermissionDenied:
+   193              return False
+   194      return False
+        
+        
+   195  class PermissionsMixin(models.Model):
+   196      """
+   197      Add the fields and methods necessary to support the Group and Permission
+   198      models using the ModelBackend.
+   199      """
+        
+   200      is_superuser = models.BooleanField(
+   201          _("superuser status"),
+   202          default=False,
+   203          help_text=_(
+   204              "Designates that this user has all permissions without "
+   205              "explicitly assigning them."
+   206          ),
+   207      )
+   208      groups = models.ManyToManyField(
+   209          Group,
+   210          verbose_name=_("groups"),
+   211          blank=True,
+   212          help_text=_(
+   213              "The groups this user belongs to. A user will get all permissions "
+   214              "granted to each of their groups."
+   215          ),
+   216          related_name="user_set",
+   217          related_query_name="user",
+   218      )
+   219      user_permissions = models.ManyToManyField(
+   220          Permission,
+   221          verbose_name=_("user permissions"),
+   222          blank=True,
+   223          help_text=_("Specific permissions for this user."),
+   224          related_name="user_set",
+   225          related_query_name="user",
+   226      )
+        
+   227      class Meta:
+   228          abstract = True
+        
+   229      def get_user_permissions(self, obj=None):
+   230          """
+   231          Return a list of permission strings that this user has directly.
+   232          Query all available auth backends. If an object is passed in,
+   233          return only permissions matching this object.
+   234          """
+   235          return _user_get_permissions(self, obj, "user")
+        
+   236      def get_group_permissions(self, obj=None):
+   237          """
+   238          Return a list of permission strings that this user has through their
+   239          groups. Query all available auth backends. If an object is passed in,
+   240          return only permissions matching this object.
+   241          """
+   242          return _user_get_permissions(self, obj, "group")
+        
+   243      def get_all_permissions(self, obj=None):
+   244          return _user_get_permissions(self, obj, "all")
+        
+   245      def has_perm(self, perm, obj=None):
+   246          """
+   247          Return True if the user has the specified permission. Query all
+   248          available auth backends, but return immediately if any backend returns
+   249          True. Thus, a user who has permission from a single auth backend is
+   250          assumed to have permission in general. If an object is provided, check
+   251          permissions for that object.
+   252          """
+   253          # Active superusers have all permissions.
+   254          if self.is_active and self.is_superuser:
+   255              return True
+        
+   256          # Otherwise we need to check the backends.
+   257          return _user_has_perm(self, perm, obj)
+        
+   258      def has_perms(self, perm_list, obj=None):
+   259          """
+   260          Return True if the user has each of the specified permissions. If
+   261          object is passed, check if the user has all required perms for it.
+   262          """
+   263          if not is_iterable(perm_list) or isinstance(perm_list, str):
+   264              raise ValueError("perm_list must be an iterable of permissions.")
+   265          return all(self.has_perm(perm, obj) for perm in perm_list)
+        
+   266      def has_module_perms(self, app_label):
+   267          """
+   268          Return True if the user has any permissions in the given app label.
+   269          Use similar logic as has_perm(), above.
+   270          """
+   271          # Active superusers have all permissions.
+   272          if self.is_active and self.is_superuser:
+   273              return True
+        
+   274          return _user_has_module_perms(self, app_label)
+        
+        
+   275  class AbstractUser(AbstractBaseUser, PermissionsMixin):
+   276      """
+   277      An abstract base class implementing a fully featured User model with
+   278      admin-compliant permissions.
+        
+   279      Username and password are required. Other fields are optional.
+   280      """
+        
+   281      username_validator = UnicodeUsernameValidator()
+        
+   282      username = models.CharField(
+   283          _("username"),
+   284          max_length=150,
+   285          unique=True,
+   286          help_text=_(
+   287              "Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."
+   288          ),
+   289          validators=[username_validator],
+   290          error_messages={
+   291              "unique": _("A user with that username already exists."),
+   292          },
+   293      )
+   294      first_name = models.CharField(_("first name"), max_length=150, blank=True)
+   295      last_name = models.CharField(_("last name"), max_length=150, blank=True)
+   296      email = models.EmailField(_("email address"), blank=True)
+   297      is_staff = models.BooleanField(
+   298          _("staff status"),
+   299          default=False,
+   300          help_text=_("Designates whether the user can log into this admin site."),
+   301      )
+   302      is_active = models.BooleanField(
+   303          _("active"),
+   304          default=True,
+   305          help_text=_(
+   306              "Designates whether this user should be treated as active. "
+   307              "Unselect this instead of deleting accounts."
+   308          ),
+   309      )
+   310      date_joined = models.DateTimeField(_("date joined"), default=timezone.now)
+        
+   311      objects = UserManager()
+        
+   312      EMAIL_FIELD = "email"
+   313      USERNAME_FIELD = "username"
+   314      REQUIRED_FIELDS = ["email"]
+        
+   315      class Meta:
+   316          verbose_name = _("user")
+   317          verbose_name_plural = _("users")
+   318          abstract = True
+        
+   319      def clean(self):
+   320          super().clean()
+   321          self.email = self.__class__.objects.normalize_email(self.email)
+        
+   322      def get_full_name(self):
+   323          """
+   324          Return the first_name plus the last_name, with a space in between.
+   325          """
+   326          full_name = "%s %s" % (self.first_name, self.last_name)
+   327          return full_name.strip()
+        
+   328      def get_short_name(self):
+   329          """Return the short name for the user."""
+   330          return self.first_name
+        
+   331      def email_user(self, subject, message, from_email=None, **kwargs):
+
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I'll open django/contrib/auth/base_user.py to inspect AbstractBaseUser.get_session_auth_hash and confirm whether it passes a secret to salted_hmac. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/base_user.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+300
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+     1  """
+     2  This module allows importing AbstractBaseUser even when django.contrib.auth is
+     3  not in INSTALLED_APPS.
+     4  """
+     5  import unicodedata
+     6  import warnings
+        
+     7  from django.contrib.auth import password_validation
+     8  from django.contrib.auth.hashers import (
+     9      check_password,
+    10      is_password_usable,
+    11      make_password,
+    12  )
+    13  from django.db import models
+    14  from django.utils.crypto import get_random_string, salted_hmac
+    15  from django.utils.deprecation import RemovedInDjango51Warning
+    16  from django.utils.translation import gettext_lazy as _
+        
+        
+    17  class BaseUserManager(models.Manager):
+    18      @classmethod
+    19      def normalize_email(cls, email):
+    20          """
+    21          Normalize the email address by lowercasing the domain part of it.
+    22          """
+    23          email = email or ""
+    24          try:
+    25              email_name, domain_part = email.strip().rsplit("@", 1)
+    26          except ValueError:
+    27              pass
+    28          else:
+    29              email = email_name + "@" + domain_part.lower()
+    30          return email
+        
+    31      def make_random_password(
+    32          self,
+    33          length=10,
+    34          allowed_chars="abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+    35      ):
+    36          """
+    37          Generate a random password with the given length and given
+    38          allowed_chars. The default value of allowed_chars does not have "I" or
+    39          "O" or letters and digits that look similar -- just to avoid confusion.
+    40          """
+    41          warnings.warn(
+    42              "BaseUserManager.make_random_password() is deprecated.",
+    43              category=RemovedInDjango51Warning,
+    44              stacklevel=2,
+    45          )
+    46          return get_random_string(length, allowed_chars)
+        
+    47      def get_by_natural_key(self, username):
+    48          return self.get(**{self.model.USERNAME_FIELD: username})
+        
+        
+    49  class AbstractBaseUser(models.Model):
+    50      password = models.CharField(_("password"), max_length=128)
+    51      last_login = models.DateTimeField(_("last login"), blank=True, null=True)
+        
+    52      is_active = True
+        
+    53      REQUIRED_FIELDS = []
+        
+    54      # Stores the raw password if set_password() is called so that it can
+    55      # be passed to password_changed() after the model is saved.
+    56      _password = None
+        
+    57      class Meta:
+    58          abstract = True
+        
+    59      def __str__(self):
+    60          return self.get_username()
+        
+    61      def save(self, *args, **kwargs):
+    62          super().save(*args, **kwargs)
+    63          if self._password is not None:
+    64              password_validation.password_changed(self._password, self)
+    65              self._password = None
+        
+    66      def get_username(self):
+    67          """Return the username for this User."""
+    68          return getattr(self, self.USERNAME_FIELD)
+        
+    69      def clean(self):
+    70          setattr(self, self.USERNAME_FIELD, self.normalize_username(self.get_username()))
+        
+    71      def natural_key(self):
+    72          return (self.get_username(),)
+        
+    73      @property
+    74      def is_anonymous(self):
+    75          """
+    76          Always return False. This is a way of comparing User objects to
+    77          anonymous users.
+    78          """
+    79          return False
+        
+    80      @property
+    81      def is_authenticated(self):
+    82          """
+    83          Always return True. This is a way to tell if the user has been
+    84          authenticated in templates.
+    85          """
+    86          return True
+        
+    87      def set_password(self, raw_password):
+    88          self.password = make_password(raw_password)
+    89          self._password = raw_password
+        
+    90      def check_password(self, raw_password):
+    91          """
+    92          Return a boolean of whether the raw_password was correct. Handles
+    93          hashing formats behind the scenes.
+    94          """
+        
+    95          def setter(raw_password):
+    96              self.set_password(raw_password)
+    97              # Password hash upgrades shouldn't be considered password changes.
+    98              self._password = None
+    99              self.save(update_fields=["password"])
+        
+   100          return check_password(raw_password, self.password, setter)
+        
+   101      def set_unusable_password(self):
+   102          # Set a value that will never be a valid hash
+   103          self.password = make_password(None)
+        
+   104      def has_usable_password(self):
+   105          """
+   106          Return False if set_unusable_password() has been called for this user.
+   107          """
+   108          return is_password_usable(self.password)
+        
+   109      def get_session_auth_hash(self):
+   110          """
+   111          Return an HMAC of the password field.
+   112          """
+   113          key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+   114          return salted_hmac(
+   115              key_salt,
+   116              self.password,
+   117              algorithm="sha256",
+   118          ).hexdigest()
+        
+   119      @classmethod
+   120      def get_email_field_name(cls):
+   121          try:
+   122              return cls.EMAIL_FIELD
+   123          except AttributeError:
+   124              return "email"
+        
+   125      @classmethod
+   126      def normalize_username(cls, username):
+   127          return (
+   128              unicodedata.normalize("NFKC", username)
+   129              if isinstance(username, str)
+   130              else username
+   131          )
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I'll open django/utils/crypto.py to inspect the salted_hmac implementation and confirm whether it accepts a secret argument or supports fallback keys. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/utils/crypto.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+     1  """
+     2  Django's standard crypto functions and utilities.
+     3  """
+     4  import hashlib
+     5  import hmac
+     6  import secrets
+        
+     7  from django.conf import settings
+     8  from django.utils.encoding import force_bytes
+        
+        
+     9  class InvalidAlgorithm(ValueError):
+    10      """Algorithm is not supported by hashlib."""
+        
+    11      pass
+        
+        
+    12  def salted_hmac(key_salt, value, secret=None, *, algorithm="sha1"):
+    13      """
+    14      Return the HMAC of 'value', using a key generated from key_salt and a
+    15      secret (which defaults to settings.SECRET_KEY). Default algorithm is SHA1,
+    16      but any algorithm name supported by hashlib can be passed.
+        
+    17      A different key_salt should be passed in for every application of HMAC.
+    18      """
+    19      if secret is None:
+    20          secret = settings.SECRET_KEY
+        
+    21      key_salt = force_bytes(key_salt)
+    22      secret = force_bytes(secret)
+    23      try:
+    24          hasher = getattr(hashlib, algorithm)
+    25      except AttributeError as e:
+    26          raise InvalidAlgorithm(
+    27              "%r is not an algorithm accepted by the hashlib module." % algorithm
+    28          ) from e
+    29      # We need to generate a derived key from our base key.  We can do this by
+    30      # passing the key_salt and our base key through a pseudo-random function.
+    31      key = hasher(key_salt + secret).digest()
+    32      # If len(key_salt + secret) > block size of the hash algorithm, the above
+    33      # line is redundant and could be replaced by key = key_salt + secret, since
+    34      # the hmac module does the same thing for keys longer than the block size.
+    35      # However, we need to ensure that we *always* do this.
+    36      return hmac.new(key, msg=force_bytes(value), digestmod=hasher)
+        
+        
+    37  RANDOM_STRING_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        
+        
+    38  def get_random_string(length, allowed_chars=RANDOM_STRING_CHARS):
+    39      """
+    40      Return a securely generated random string.
+        
+    41      The bit length of the returned value can be calculated with the formula:
+    42          log_2(len(allowed_chars)^length)
+        
+    43      For example, with default `allowed_chars` (26+26+10), this gives:
+    44        * length: 12, bit length =~ 71 bits
+    45        * length: 22, bit length =~ 131 bits
+    46      """
+    47      return "".join(secrets.choice(allowed_chars) for i in range(length))
+        
+        
+    48  def constant_time_compare(val1, val2):
+    49      """Return True if the two strings are equal, False otherwise."""
+    50      return secrets.compare_digest(force_bytes(val1), force_bytes(val2))
+        
+        
+    51  def pbkdf2(password, salt, iterations, dklen=0, digest=None):
+    52      """Return the hash of password using pbkdf2."""
+    53      if digest is None:
+    54          digest = hashlib.sha256
+    55      dklen = dklen or None
+    56      password = force_bytes(password)
+    57      salt = force_bytes(salt)
+    58      return hashlib.pbkdf2_hmac(digest().name, password, salt, iterations, dklen)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+The docs mention rotating SECRET_KEY_FALLBACKS — I'll open the referenced settings docs section to find the exact wording so I can make a minimal correction clarifying that session auth hashes (get_session_auth_hash) do not use SECRET_KEY_FALLBACKS. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+docs/ref/settings.txt
+----ARG----
+start_line
+2288
+----ARG----
+end_line
+2316
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+  2288  .. note::
+        
+  2289      The default :file:`settings.py` file created by :djadmin:`django-admin
+  2290      startproject <startproject>` creates a unique ``SECRET_KEY`` for
+  2291      convenience.
+        
+  2292  .. setting:: SECRET_KEY_FALLBACKS
+        
+  2293  ``SECRET_KEY_FALLBACKS``
+  2294  ------------------------
+        
+  2295  Default: ``[]``
+        
+  2296  A list of fallback secret keys for a particular Django installation. These are
+  2297  used to allow rotation of the ``SECRET_KEY``.
+        
+  2298  In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+  2299  previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+  2300  old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+  2301  expire the sessions, password reset tokens, and so on, that make use of them.
+        
+  2302  .. note::
+        
+  2303      Signing operations are computationally expensive. Having multiple old key
+  2304      values in ``SECRET_KEY_FALLBACKS`` adds additional overhead to all checks
+  2305      that don't match an earlier key.
+        
+  2306      As such, fallback values should be removed after an appropriate period,
+  2307      allowing for key rotation.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+The docs section should be corrected to avoid implying that session auth hashes (generated by AbstractBaseUser.get_session_auth_hash) use SECRET_KEY_FALLBACKS — they don't, because salted_hmac defaults to settings.SECRET_KEY and get_session_auth_hash doesn't pass a secret. I'll make a minimal edit to the settings docs to clarify which signing operations use SECRET_KEY_FALLBACKS and to remove "sessions" from the example list. 
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+docs/ref/settings.txt
+----ARG----
+from_line
+2296
+----ARG----
+to_line
+2301
+----ARG----
+content
+Default: ``[]``
+
+A list of fallback secret keys for a particular Django installation. These are
+used to allow rotation of the ``SECRET_KEY``.
+
+In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+expire the signed values that make use of them (for example, cookie-based
+signatures generated by Django's signing utilities). Note that some values
+derived from the password hash (such as the session authentication hash
+returned by ``AbstractBaseUser.get_session_auth_hash``) are computed using
+``settings.SECRET_KEY`` directly and do not consult ``SECRET_KEY_FALLBACKS``.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+✓ Successfully replaced lines 2296-2301 in docs/ref/settings.txt. Replaced 6 lines with 13 lines (net change: +7 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 3791 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+  2296 - │ ``SECRET_KEY_FALLBACKS``
+  2296 + │ Default: ``[]`` 
+  2297 - │ ------------------------
+  2297 + │  
+  2298 - │ 
+  2298 + │ A list of fallback secret keys for a particular Django insta… 
+  2299 - │ Default: ``[]``
+  2299 + │ used to allow rotation of the ``SECRET_KEY``. 
+  2300   │ 
+  2301 - │ A list of fallback secret keys for a particular Django insta…
+  2301 + │ In order to rotate your secret keys, set a new ``SECRET_KEY`… 
+  2302 + │ previous value to the beginning of ``SECRET_KEY_FALLBACKS``.… (ADDED) 
+  2303 + │ old values from the end of the ``SECRET_KEY_FALLBACKS`` when… (ADDED) 
+  2304 + │ expire the signed values that make use of them (for example,… (ADDED) 
+  2305 + │ signatures generated by Django's signing utilities). Note th… (ADDED) 
+  2306 + │ derived from the password hash (such as the session authenti… (ADDED) 
+  2307 + │ returned by ``AbstractBaseUser.get_session_auth_hash``) are … (ADDED) 
+  2308 + │ ``settings.SECRET_KEY`` directly and do not consult ``SECRET… (ADDED) 
+──────────────────────────────────────────────────────────────────────
+
+----------------------------
+|MESSAGE(role="assistant", id=23)|
+I'll re-open the edited section of docs/ref/settings.txt to verify the replacement and check whitespace/indentation around the new wording.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+docs/ref/settings.txt
+----ARG----
+start_line
+2288
+----ARG----
+end_line
+2316
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=24)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+··2288  .. note::
+········
+··2289      The default :file:`settings.py` file created by :djadmin:`django-admin
+··2290      startproject <startproject>` creates a unique ``SECRET_KEY`` for
+··2291      convenience.
+········
+··2292  .. setting:: SECRET_KEY_FALLBACKS
+········
+··2293  Default: ``[]``
+········
+··2294  A list of fallback secret keys for a particular Django installation. These are
+··2295  used to allow rotation of the ``SECRET_KEY``.
+········
+··2296  In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+··2297  previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+··2298  old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+··2299  expire the signed values that make use of them (for example, cookie-based
+··2300  signatures generated by Django's signing utilities). Note that some values
+··2301  derived from the password hash (such as the session authentication hash
+··2302  returned by ``AbstractBaseUser.get_session_auth_hash``) are computed using
+··2303  ``settings.SECRET_KEY`` directly and do not consult ``SECRET_KEY_FALLBACKS``.
+··2304  used to allow rotation of the ``SECRET_KEY``.
+········
+··2305  In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+··2306  previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+··2307  old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+··2308  expire the sessions, password reset tokens, and so on, that make use of them.
+········
+··2309  .. note::
+
+
+----------------------------
+|MESSAGE(role="assistant", id=25)|
+I will detect the file's indentation style before making the small delete to remove the duplicated original paragraph.  
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+docs/ref/settings.txt
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=26)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=27)|
+I will remove the duplicated paragraph lines that were left behind in docs/ref/settings.txt to leave only the corrected wording.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+docs/ref/settings.txt
+----ARG----
+from_line
+2304
+----ARG----
+to_line
+2308
+----ARG----
+content
+
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=28)|
+✓ Successfully replaced lines 2304-2308 in docs/ref/settings.txt. Replaced 5 lines with 1 lines (net change: -4 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 3787 total lines.
+
+⚠️  WARNING: You removed import statements. Verify this doesn't break code that uses them!
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+  2304 - │ expire the signed values that make use of them (for example,…
+  2304 + │  
+  2305 - │ signatures generated by Django's signing utilities). Note th… (REMOVED)
+  2306 - │ derived from the password hash (such as the session authenti… (REMOVED)
+  2307 - │ returned by ``AbstractBaseUser.get_session_auth_hash``) are … (REMOVED)
+  2308 - │ ``settings.SECRET_KEY`` directly and do not consult ``SECRET… (REMOVED)
+──────────────────────────────────────────────────────────────────────
+
+----------------------------
+|MESSAGE(role="assistant", id=29)|
+I'll re-open the edited section of the settings docs to verify the final wording and ensure no unintended deletions remain.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+docs/ref/settings.txt
+----ARG----
+start_line
+2288
+----ARG----
+end_line
+2312
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=30)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+··2288  .. note::
+········
+··2289      The default :file:`settings.py` file created by :djadmin:`django-admin
+··2290      startproject <startproject>` creates a unique ``SECRET_KEY`` for
+··2291      convenience.
+········
+··2292  .. setting:: SECRET_KEY_FALLBACKS
+········
+··2293  Default: ``[]``
+········
+··2294  A list of fallback secret keys for a particular Django installation. These are
+··2295  used to allow rotation of the ``SECRET_KEY``.
+········
+··2296  In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+··2297  previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+··2298  old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+········
+··2299  used to allow rotation of the ``SECRET_KEY``.
+········
+··2300  In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+··2301  previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+··2302  old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+··2303  expire the sessions, password reset tokens, and so on, that make use of them.
+········
+··2304  .. note::
+
+
+----------------------------
+|MESSAGE(role="assistant", id=31)|
+I will re-open the edited section to inspect the duplicated paragraphs so I can make a minimal cleanup and ensure the docs contain only the corrected wording.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+docs/ref/settings.txt
+----ARG----
+start_line
+2292
+----ARG----
+end_line
+2306
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=32)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+··2292      convenience.
+········
+··2293  .. setting:: SECRET_KEY_FALLBACKS
+········
+··2294  Default: ``[]``
+········
+··2295  A list of fallback secret keys for a particular Django installation. These are
+··2296  used to allow rotation of the ``SECRET_KEY``.
+········
+··2297  In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+··2298  previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+··2299  old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+········
+··2300  used to allow rotation of the ``SECRET_KEY``.
+········
+
+
+----------------------------
+|MESSAGE(role="assistant", id=33)|
+I'll run the repository verification checks (syntax, semantic, and git diff) to ensure the docs edit is correct and no unintended changes remain before finishing.
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=34)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 6
+   Lines deleted: 2
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: No Python files to check.
+
+✅ CHECK 4 PASSED: No semantic errors detected in Python files
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/docs/ref/settings.txt b/docs/ref/settings.txt
+index 41387886c0..0f342031de 100644
+--- a/docs/ref/settings.txt
++++ b/docs/ref/settings.txt
+@@ -2293,14 +2293,17 @@ passwords of users and key rotation will not affect them.
+ 
+ .. setting:: SECRET_KEY_FALLBACKS
+ 
+-``SECRET_KEY_FALLBACKS``
+-------------------------
+-
+ Default: ``[]``
+ 
+ A list of fallback secret keys for a particular Django installation. These are
+ used to allow rotation of the ``SECRET_KEY``.
+ 
++In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
++previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
++old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
++
++used to allow rotation of the ``SECRET_KEY``.
++
+ In order to rotate your secret keys, set a new ``SECRET_KEY`` and move the
+ previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+ old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+
