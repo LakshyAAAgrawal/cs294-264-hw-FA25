@@ -918,7 +918,7 @@ class ReactAgent:
         """
         for tool in tools:
             self.function_map[tool.__name__] = tool
-    
+
     def finish(self, result: str):
         """The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
 
@@ -942,13 +942,13 @@ class ReactAgent:
         """
         # Update instruction node content
         self.set_message_content(self.instructions_message_id, instructions)
-        
+
         # Backtrack to specified message
         if at_message_id < 0 or at_message_id >= len(self.id_to_message):
             raise ValueError(f"Invalid at_message_id: {at_message_id}")
-        
+
         self.current_message_id = at_message_id
-        
+
         return f"Instructions updated and backtracked to message {at_message_id}."
 
     # -------------------- MAIN LOOP --------------------
@@ -966,10 +966,10 @@ class ReactAgent:
         """
         # Ensure max_steps is capped at 100
         max_steps = min(max_steps, 100)
-        
+
         # Set the user prompt
         self.set_message_content(self.user_message_id, task)
-        
+
         # Main ReAct loop
         for step in range(max_steps):
             if self.current_message_id != self.last_printed_message_id:
@@ -1015,11 +1015,18 @@ class ReactAgent:
                         
                         # If finish was called, return the result
                         if function_name == "finish":
+                            oo = self.function_map["generate_patch"](result)
+                            if "diff --git" not in oo:
+                                # The agent has not actually mande any code changes. Add error message
+                                error_msg = "Error: finish() must be called only after making code changes. You must use the file edit tools to make changes to the codebase to resolve the issue. After making changes, you must call finish() to indicate that the task has been completed."
+                                self.add_message("tool", error_msg)
+                                continue
+
                             return result
-                        
+
                         # Add tool result to tree
                         self.add_message("tool", str(result))
-                        
+
                     except TypeError as e:
                         # Handle argument mismatch errors
                         import traceback
@@ -1046,6 +1053,18 @@ class ReactAgent:
                 traceback.print_exc()
                 error_msg = f"Unexpected error in step {step}: {str(e)}"
                 self.add_message("tool", error_msg)
+        
+        if self.current_message_id != self.last_printed_message_id:
+            # Print messages from last printed message id to current message id
+            for msg_id in range(self.last_printed_message_id + 1, self.current_message_id + 1):
+                # print(self.message_id_to_context(msg_id))
+                # Write to file Path(self.output_dir) / "exec_trajectories" / f"{self.instance_id}.txt"
+                os.makedirs(Path(self.output_dir) / "exec_trajectories", exist_ok=True)
+                with open(Path(self.output_dir) / "exec_trajectories" / f"{self.instance_id}.txt", "a") as f:
+                    f.write(self.message_id_to_context(msg_id))
+                    f.write("\n")
+
+            self.last_printed_message_id = self.current_message_id
         
         # If we reach max_steps without finishing
         return f"Agent reached maximum steps ({max_steps}) without completing the task."
