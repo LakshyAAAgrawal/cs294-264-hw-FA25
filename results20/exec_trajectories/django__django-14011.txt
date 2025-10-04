@@ -1,0 +1,998 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Use search_in_directory to find relevant files or patterns
+   - Use find_file to locate files by name
+   - Use search_in_file for precise in-file queries
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise text changes: Use find_and_replace_text (safer, no line numbers)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd, check_syntax for Python) as appropriate
+5) Finish
+   - Call git_diff to confirm actual changes
+   - If the diff is correct, finish() with a brief summary of the fix
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+INDENTATION RULES (CRITICAL FOR SUCCESS):
+- BEFORE editing: Call detect_indentation(file_path) to see if file uses tabs or spaces
+- Read the exact lines you'll replace - note the indentation level precisely
+- Match indentation EXACTLY - count spaces/tabs character-by-character
+- For Python files: After EVERY edit, call check_syntax(file_path) to catch indentation errors
+- If syntax check fails, immediately fix and re-check before proceeding
+- Common mistake: Copying indentation from system prompt examples instead of from the actual file
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling git_diff to verify changes
+- Asking the user for input or choices
+- Not calling check_syntax after editing Python files
+
+Search strategies:
+- Start broad with search_in_directory; narrow with search_in_file
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Prefer replace_in_file for small, precise changes
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+How to finish (MANDATORY CHECKLIST):
+Before calling finish(), complete ALL of these steps:
+1. Run git_diff() and carefully review the changes
+2. For Python files: Run check_repo_syntax() to verify no syntax/indentation errors
+3. Verify the diff matches the task requirements:
+   - Check for correct indentation (no misaligned code)
+   - Check for NO deleted imports or critical code
+   - Check for NO duplicate functions or methods
+   - Check that only relevant code was modified
+4. If issues found in diff: Fix them immediately, don't call finish()
+5. Only call finish() when the diff is clean and correct
+6. Do not finish if no changes were made or if changes are incorrect
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I’ll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example workflow (concise):
+1) search_in_directory → 2) show_file → 3) replace_in_file → 4) show_file (re-read) → 5) tests via run_bash_cmd → 6) git_diff → 7) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files (according to git). If none modified, checks all tracked Python files.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file (simpler and safer than line-number-based replacement).
+This tool is useful for small, precise changes where you know the exact text to replace.
+
+Advantages over replace_in_file:
+- No line numbers needed (no stale line number issues)
+- Automatically preserves surrounding code
+- Safer for small, targeted changes
+- Less prone to indentation errors
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+LiveServerTestCase's ThreadedWSGIServer doesn't close database connections after each thread
+Description
+	
+In Django 2.2.17, I'm seeing the reappearance of #22414 after it was fixed in 1.11. #22414 is the issue where the following error will occur at the conclusion of a test run when destroy_test_db() is called:
+OperationalError: database "test_myapp" is being accessed by other users
+This error happens when not all of the database connections are closed. In my case today, I'm seeing this when running a single test that is a LiveServerTestCase. I see it in approximately half of my test runs, so it's not wholly deterministic (it's a race condition).
+There weren't a whole lot of changes in the LiveServerTestCase-related code between 1.11 and 2.2, so I looked at them individually.
+Issue #20238 added threading support to LiveServerTestCase. One of the changes it made ​was changing LiveServerThread to use ThreadedWSGIServer instead of WSGIServer. LiveServerThread is used by LiveServerTestCase.
+When I tried modifying LiveServerThread to use the old WSGIServer, I could no longer reproduce the above error. My changes were as follows:
+class NonThreadedLiveServerThread(LiveServerThread):
+	def _create_server(self):
+		return WSGIServer((self.host, self.port), QuietWSGIRequestHandler, allow_reuse_address=False)
+class MyTest(LiveServerTestCase):
+	server_thread_class = NonThreadedLiveServerThread
+The CPython docs ​describe ThreadingMixIn as defining an attribute "which indicates whether or not the server should wait for thread termination."
+Consistent with what I described above, Aymeric said the following on ticket #20238, seeming to foreshadow issues like this one:
+more threading will certainly create more race conditions on shutdown, especially when it comes to the database connections — it's taken months to eliminate most from LiveServerTestCase, and I'm sure there are still some left,
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll search the repository for LiveServerTestCase, LiveServerThread, and ThreadedWSGIServer references to locate the relevant test server code to inspect and edit. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+LiveServerTestCase|LiveServerThread|ThreadedWSGIServer|ThreadingMixIn|ThreadedWSGIServer
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll locate the test server implementation by searching the repository for LiveServerThread references so I can inspect and modify the server/thread code. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+LiveServerThread
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+grep: ./.git/objects/pack/pack-1b5d1b03479eb6e137a9a23f6d70f49a8f24be41.pack: binary file matches
+./tests/servers/test_liveserverthread.py:3:from django.test.testcases import LiveServerThread
+./tests/servers/test_liveserverthread.py:9:class LiveServerThreadTest(TransactionTestCase):
+./tests/servers/test_liveserverthread.py:39:        class MyServerThread(LiveServerThread):
+./tests/servers/tests.py:15:from django.test.testcases import LiveServerThread, QuietWSGIRequestHandler
+./tests/servers/tests.py:43:class FailingLiveServerThread(LiveServerThread):
+./tests/servers/tests.py:49:    server_thread_class = FailingLiveServerThread
+./tests/servers/tests.py:92:class LiveServerSingleThread(LiveServerThread):
+./tests/servers/tests.py:306:class LiveServerThreadedTests(LiveServerBase):
+./django/test/testcases.py:1455:    solely as a convenience by LiveServerThread.
+./django/test/testcases.py:1467:    used solely as a convenience by LiveServerThread.
+./django/test/testcases.py:1476:class LiveServerThread(threading.Thread):
+./django/test/testcases.py:1544:    server_thread_class = LiveServerThread
+./django/test/selenium.py:119:        # single-threaded LiveServerThread to avoid a dead lock if the browser
+./django/db/backends/sqlite3/features.py:85:                    'servers.test_liveserverthread.LiveServerThreadTest.test_closes_connections',
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll inspect the LiveServerThread implementation in django/test/testcases.py to find where the server is created and how ThreadedWSGIServer is used so I can plan a minimal fix. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/test/testcases.py
+----ARG----
+start_line
+1460
+----ARG----
+end_line
+1580
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+  1460      def get_base_url(self):
+  1461          return settings.STATIC_URL
+        
+        
+  1462  class _MediaFilesHandler(FSFilesHandler):
+  1463      """
+  1464      Handler for serving the media files. A private class that is meant to be
+  1465      used solely as a convenience by LiveServerThread.
+  1466      """
+  1467      def get_base_dir(self):
+  1468          return settings.MEDIA_ROOT
+        
+  1469      def get_base_url(self):
+  1470          return settings.MEDIA_URL
+        
+        
+  1471  class LiveServerThread(threading.Thread):
+  1472      """Thread for running a live http server while the tests are running."""
+        
+  1473      server_class = ThreadedWSGIServer
+        
+  1474      def __init__(self, host, static_handler, connections_override=None, port=0):
+  1475          self.host = host
+  1476          self.port = port
+  1477          self.is_ready = threading.Event()
+  1478          self.error = None
+  1479          self.static_handler = static_handler
+  1480          self.connections_override = connections_override
+  1481          super().__init__()
+        
+  1482      def run(self):
+  1483          """
+  1484          Set up the live server and databases, and then loop over handling
+  1485          HTTP requests.
+  1486          """
+  1487          if self.connections_override:
+  1488              # Override this thread's database connections with the ones
+  1489              # provided by the main thread.
+  1490              for alias, conn in self.connections_override.items():
+  1491                  connections[alias] = conn
+  1492          try:
+  1493              # Create the handler for serving static and media files
+  1494              handler = self.static_handler(_MediaFilesHandler(WSGIHandler()))
+  1495              self.httpd = self._create_server()
+  1496              # If binding to port zero, assign the port allocated by the OS.
+  1497              if self.port == 0:
+  1498                  self.port = self.httpd.server_address[1]
+  1499              self.httpd.set_app(handler)
+  1500              self.is_ready.set()
+  1501              self.httpd.serve_forever()
+  1502          except Exception as e:
+  1503              self.error = e
+  1504              self.is_ready.set()
+  1505          finally:
+  1506              connections.close_all()
+        
+  1507      def _create_server(self):
+  1508          return self.server_class(
+  1509              (self.host, self.port),
+  1510              QuietWSGIRequestHandler,
+  1511              allow_reuse_address=False,
+  1512          )
+        
+  1513      def terminate(self):
+  1514          if hasattr(self, 'httpd'):
+  1515              # Stop the WSGI server
+  1516              self.httpd.shutdown()
+  1517              self.httpd.server_close()
+  1518          self.join()
+        
+        
+  1519  class LiveServerTestCase(TransactionTestCase):
+  1520      """
+  1521      Do basically the same as TransactionTestCase but also launch a live HTTP
+  1522      server in a separate thread so that the tests may use another testing
+  1523      framework, such as Selenium for example, instead of the built-in dummy
+  1524      client.
+  1525      It inherits from TransactionTestCase instead of TestCase because the
+  1526      threads don't share the same transactions (unless if using in-memory sqlite)
+  1527      and each thread needs to commit all their transactions so that the other
+  1528      thread can see the changes.
+  1529      """
+  1530      host = 'localhost'
+  1531      port = 0
+  1532      server_thread_class = LiveServerThread
+  1533      static_handler = _StaticFilesHandler
+        
+  1534      @classproperty
+  1535      def live_server_url(cls):
+  1536          return 'http://%s:%s' % (cls.host, cls.server_thread.port)
+        
+  1537      @classproperty
+  1538      def allowed_host(cls):
+  1539          return cls.host
+        
+  1540      @classmethod
+  1541      def setUpClass(cls):
+  1542          super().setUpClass()
+  1543          connections_override = {}
+  1544          for conn in connections.all():
+  1545              # If using in-memory sqlite databases, pass the connections to
+  1546              # the server thread.
+  1547              if conn.vendor == 'sqlite' and conn.is_in_memory_db():
+  1548                  # Explicitly enable thread-shareability for this connection
+  1549                  conn.inc_thread_sharing()
+  1550                  connections_override[conn.alias] = conn
+        
+  1551          cls._live_server_modified_settings = modify_settings(
+  1552              ALLOWED_HOSTS={'append': cls.allowed_host},
+  1553          )
+  1554          cls._live_server_modified_settings.enable()
+  1555          cls.server_thread = cls._create_server_thread(connections_override)
+  1556          cls.server_thread.daemon = True
+  1557          cls.server_thread.start()
+        
+  1558          # Wait for the live server to be ready
+  1559          cls.server_thread.is_ready.wait()
+  1560          if cls.server_thread.error:
+  1561              # Clean up behind ourselves, since tearDownClass won't get called in
+  1562              # case of errors.
+  1563              cls._tearDownClassInternal()
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I'll locate django's basehttp module so I can inspect ThreadedWSGIServer and add a per-request connection close. 
+----BEGIN_FUNCTION_CALL----
+find_file
+----ARG----
+filename
+basehttp.py
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+./django/core/servers/basehttp.py
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll open django/core/servers/basehttp.py to find ThreadedWSGIServer and where request handling could be extended to close DB connections after each request. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/servers/basehttp.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+     1  """
+     2  HTTP server that implements the Python WSGI protocol (PEP 333, rev 1.21).
+        
+     3  Based on wsgiref.simple_server which is part of the standard library since 2.5.
+        
+     4  This is a simple server for use in testing or debugging Django apps. It hasn't
+     5  been reviewed for security issues. DON'T USE IT FOR PRODUCTION USE!
+     6  """
+        
+     7  import logging
+     8  import socket
+     9  import socketserver
+    10  import sys
+    11  from wsgiref import simple_server
+        
+    12  from django.core.exceptions import ImproperlyConfigured
+    13  from django.core.handlers.wsgi import LimitedStream
+    14  from django.core.wsgi import get_wsgi_application
+    15  from django.utils.module_loading import import_string
+        
+    16  __all__ = ('WSGIServer', 'WSGIRequestHandler')
+        
+    17  logger = logging.getLogger('django.server')
+        
+        
+    18  def get_internal_wsgi_application():
+    19      """
+    20      Load and return the WSGI application as configured by the user in
+    21      ``settings.WSGI_APPLICATION``. With the default ``startproject`` layout,
+    22      this will be the ``application`` object in ``projectname/wsgi.py``.
+        
+    23      This function, and the ``WSGI_APPLICATION`` setting itself, are only useful
+    24      for Django's internal server (runserver); external WSGI servers should just
+    25      be configured to point to the correct application object directly.
+        
+    26      If settings.WSGI_APPLICATION is not set (is ``None``), return
+    27      whatever ``django.core.wsgi.get_wsgi_application`` returns.
+    28      """
+    29      from django.conf import settings
+    30      app_path = getattr(settings, 'WSGI_APPLICATION')
+    31      if app_path is None:
+    32          return get_wsgi_application()
+        
+    33      try:
+    34          return import_string(app_path)
+    35      except ImportError as err:
+    36          raise ImproperlyConfigured(
+    37              "WSGI application '%s' could not be loaded; "
+    38              "Error importing module." % app_path
+    39          ) from err
+        
+        
+    40  def is_broken_pipe_error():
+    41      exc_type, _, _ = sys.exc_info()
+    42      return issubclass(exc_type, (
+    43          BrokenPipeError,
+    44          ConnectionAbortedError,
+    45          ConnectionResetError,
+    46      ))
+        
+        
+    47  class WSGIServer(simple_server.WSGIServer):
+    48      """BaseHTTPServer that implements the Python WSGI protocol"""
+        
+    49      request_queue_size = 10
+        
+    50      def __init__(self, *args, ipv6=False, allow_reuse_address=True, **kwargs):
+    51          if ipv6:
+    52              self.address_family = socket.AF_INET6
+    53          self.allow_reuse_address = allow_reuse_address
+    54          super().__init__(*args, **kwargs)
+        
+    55      def handle_error(self, request, client_address):
+    56          if is_broken_pipe_error():
+    57              logger.info("- Broken pipe from %s\n", client_address)
+    58          else:
+    59              super().handle_error(request, client_address)
+        
+        
+    60  class ThreadedWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
+    61      """A threaded version of the WSGIServer"""
+    62      daemon_threads = True
+        
+        
+    63  class ServerHandler(simple_server.ServerHandler):
+    64      http_version = '1.1'
+        
+    65      def __init__(self, stdin, stdout, stderr, environ, **kwargs):
+    66          """
+    67          Use a LimitedStream so that unread request data will be ignored at
+    68          the end of the request. WSGIRequest uses a LimitedStream but it
+    69          shouldn't discard the data since the upstream servers usually do this.
+    70          This fix applies only for testserver/runserver.
+    71          """
+    72          try:
+    73              content_length = int(environ.get('CONTENT_LENGTH'))
+    74          except (ValueError, TypeError):
+    75              content_length = 0
+    76          super().__init__(LimitedStream(stdin, content_length), stdout, stderr, environ, **kwargs)
+        
+    77      def cleanup_headers(self):
+    78          super().cleanup_headers()
+    79          # HTTP/1.1 requires support for persistent connections. Send 'close' if
+    80          # the content length is unknown to prevent clients from reusing the
+    81          # connection.
+    82          if 'Content-Length' not in self.headers:
+    83              self.headers['Connection'] = 'close'
+    84          # Persistent connections require threading server.
+    85          elif not isinstance(self.request_handler.server, socketserver.ThreadingMixIn):
+    86              self.headers['Connection'] = 'close'
+    87          # Mark the connection for closing if it's set as such above or if the
+    88          # application sent the header.
+    89          if self.headers.get('Connection') == 'close':
+    90              self.request_handler.close_connection = True
+        
+    91      def close(self):
+    92          self.get_stdin()._read_limited()
+    93          super().close()
+        
+        
+    94  class WSGIRequestHandler(simple_server.WSGIRequestHandler):
+    95      protocol_version = 'HTTP/1.1'
+        
+    96      def address_string(self):
+    97          # Short-circuit parent method to not call socket.getfqdn
+    98          return self.client_address[0]
+        
+    99      def log_message(self, format, *args):
+   100          extra = {
+   101              'request': self.request,
+   102              'server_time': self.log_date_time_string(),
+   103          }
+   104          if args[1][0] == '4':
+   105              # 0x16 = Handshake, 0x03 = SSL 3.0 or TLS 1.x
+   106              if args[0].startswith('\x16\x03'):
+   107                  extra['status_code'] = 500
+   108                  logger.error(
+   109                      "You're accessing the development server over HTTPS, but "
+   110                      "it only supports HTTP.\n", extra=extra,
+   111                  )
+   112                  return
+        
+   113          if args[1].isdigit() and len(args[1]) == 3:
+   114              status_code = int(args[1])
+   115              extra['status_code'] = status_code
+        
+   116              if status_code >= 500:
+   117                  level = logger.error
+   118              elif status_code >= 400:
+   119                  level = logger.warning
+   120              else:
+   121                  level = logger.info
+   122          else:
+   123              level = logger.info
+        
+   124          level(format, *args, extra=extra)
+        
+   125      def get_environ(self):
+   126          # Strip all headers with underscores in the name before constructing
+   127          # the WSGI environ. This prevents header-spoofing based on ambiguity
+   128          # between underscores and dashes both normalized to underscores in WSGI
+   129          # env vars. Nginx and Apache 2.4+ both do this as well.
+   130          for k in self.headers:
+   131              if '_' in k:
+   132                  del self.headers[k]
+        
+   133          return super().get_environ()
+        
+   134      def handle(self):
+   135          self.close_connection = True
+   136          self.handle_one_request()
+   137          while not self.close_connection:
+   138              self.handle_one_request()
+   139          try:
+   140              self.connection.shutdown(socket.SHUT_WR)
+   141          except (AttributeError, OSError):
+   142              pass
+        
+   143      def handle_one_request(self):
+   144          """Copy of WSGIRequestHandler.handle() but with different ServerHandler"""
+   145          self.raw_requestline = self.rfile.readline(65537)
+   146          if len(self.raw_requestline) > 65536:
+   147              self.requestline = ''
+   148              self.request_version = ''
+   149              self.command = ''
+   150              self.send_error(414)
+   151              return
+        
+   152          if not self.parse_request():  # An error code has been sent, just exit
+   153              return
+        
+   154          handler = ServerHandler(
+   155              self.rfile, self.wfile, self.get_stderr(), self.get_environ()
+   156          )
+   157          handler.request_handler = self      # backpointer for logging & connection closing
+   158          handler.run(self.server.get_app())
+        
+        
+   159  def run(addr, port, wsgi_handler, ipv6=False, threading=False, server_cls=WSGIServer):
+   160      server_address = (addr, port)
+   161      if threading:
+   162          httpd_cls = type('WSGIServer', (socketserver.ThreadingMixIn, server_cls), {})
+   163      else:
+   164          httpd_cls = server_cls
+   165      httpd = httpd_cls(server_address, WSGIRequestHandler, ipv6=ipv6)
+   166      if threading:
+   167          # ThreadingMixIn.daemon_threads indicates how threads will behave on an
+   168          # abrupt shutdown; like quitting the server by the user or restarting
+   169          # by the auto-reloader. True means the server will not wait for thread
+   170          # termination before it quits. This will make auto-reloader faster
+   171          # and will prevent the need to kill the server manually if a thread
+   172          # isn't terminating correctly.
+   173          httpd.daemon_threads = True
+   174      httpd.set_app(wsgi_handler)
+   175      httpd.serve_forever()
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll check the file's indentation style so any edits exactly match the existing indentation. 
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+django/core/servers/basehttp.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I will inspect the exact lines around handle_one_request to ensure correct indentation before making edits to close DB connections after each request. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/servers/basehttp.py
+----ARG----
+start_line
+140
+----ARG----
+end_line
+160
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+   140                  )
+   141                  return
+        
+   142          if args[1].isdigit() and len(args[1]) == 3:
+   143              status_code = int(args[1])
+   144              extra['status_code'] = status_code
+        
+   145              if status_code >= 500:
+   146                  level = logger.error
+   147              elif status_code >= 400:
+   148                  level = logger.warning
+   149              else:
+   150                  level = logger.info
+   151          else:
+   152              level = logger.info
+        
+   153          level(format, *args, extra=extra)
+        
+   154      def get_environ(self):
+   155          # Strip all headers with underscores in the name before constructing
+   156          # the WSGI environ. This prevents header-spoofing based on ambiguity
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I will add a try/finally around handler.run(...) in WSGIRequestHandler.handle_one_request to ensure connections.close_all() is called after each request (closing DB connections held by worker threads). 
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/core/servers/basehttp.py
+----ARG----
+from_line
+143
+----ARG----
+to_line
+158
+----ARG----
+content
+    def handle_one_request(self):
+        """Copy of WSGIRequestHandler.handle() but with different ServerHandler"""
+        self.raw_requestline = self.rfile.readline(65537)
+        if len(self.raw_requestline) > 65536:
+            self.requestline = ''
+            self.request_version = ''
+            self.command = ''
+            self.send_error(414)
+            return
+
+        if not self.parse_request():  # An error code has been sent, just exit
+            return
+
+        handler = ServerHandler(
+            self.rfile, self.wfile, self.get_stderr(), self.get_environ()
+        )
+        handler.request_handler = self      # backpointer for logging & connection closing
+        from django.db import connections
+        try:
+            handler.run(self.server.get_app())
+        finally:
+            connections.close_all()
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+✓ Successfully replaced lines 143-158 in django/core/servers/basehttp.py. Replaced 16 lines with 22 lines (net change: +6 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 222 total lines.
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+Re-reading the modified section to verify the added try/finally and confirm indentation and syntax are correct.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/servers/basehttp.py
+----ARG----
+start_line
+136
+----ARG----
+end_line
+180
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+   136                  extra['status_code'] = 500
+   137                  logger.error(
+   138                      "You're accessing the development server over HTTPS, but "
+   139                      "it only supports HTTP.\n", extra=extra,
+   140                  )
+   141                  return
+        
+   142  def handle_one_request(self):
+   143          """Copy of WSGIRequestHandler.handle() but with different ServerHandler"""
+   144          self.raw_requestline = self.rfile.readline(65537)
+   145          if len(self.raw_requestline) > 65536:
+   146              self.requestline = ''
+   147              self.request_version = ''
+   148              self.command = ''
+   149              self.send_error(414)
+   150              return
+        
+   151          if not self.parse_request():  # An error code has been sent, just exit
+   152              return
+        
+   153          handler = ServerHandler(
+   154              self.rfile, self.wfile, self.get_stderr(), self.get_environ()
+   155          )
+   156          handler.request_handler = self      # backpointer for logging & connection closing
+   157          from django.db import connections
+   158          try:
+   159              handler.run(self.server.get_app())
+   160          finally:
+   161              connections.close_all()
+   162          # Strip all headers with underscores in the name before constructing
+   163          # the WSGI environ. This prevents header-spoofing based on ambiguity
+   164          # between underscores and dashes both normalized to underscores in WSGI
+   165          # env vars. Nginx and Apache 2.4+ both do this as well.
+   166          for k in self.headers:
+   167              if '_' in k:
+   168                  del self.headers[k]
+        
+   169          return super().get_environ()
+        
+   170      def handle(self):
+   171          self.close_connection = True
+   172          self.handle_one_request()
+   173          while not self.close_connection:
+   174              self.handle_one_request()
+   175          try:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I'll run a repository-wide syntax check for modified Python files to ensure the recent edit didn't introduce indentation or syntax errors before producing the final diff.
+----BEGIN_FUNCTION_CALL----
+check_repo_syntax
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+✓ All checked Python files have valid syntax
+
