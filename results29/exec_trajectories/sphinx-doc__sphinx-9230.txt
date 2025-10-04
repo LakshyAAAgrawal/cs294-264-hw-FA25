@@ -1,0 +1,3209 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Shows git diff preview of all changes
+5. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+Doc rendering is incorrect when :param has datatype dict(str,str)
+**Describe the bug**
+I have a parameter defined under docstring of a method as:-
+:param dict(str, str) opc_meta: (optional)
+
+Which is being incorrectly rendered in the generated docs as:-
+str) opc_meta (dict(str,) –(optional) 
+
+**To Reproduce**
+Create any method with the docstring containg the above param
+
+**Expected behavior**
+The param should be rendered in the generated docs as:-
+opc_meta (dict(str,str)) – (optional) 
+
+**Your project**
+[sphinxTest.zip](https://github.com/sphinx-doc/sphinx/files/6468074/sphinxTest.zip)
+
+
+**Screenshots**
+<img width="612" alt="Screen Shot 2021-05-12 at 12 30 50 PM" src="https://user-images.githubusercontent.com/8617566/118020143-5f59a280-b31f-11eb-8dc2-5280d5c4896b.png">
+<img width="681" alt="Screen Shot 2021-05-12 at 12 32 25 PM" src="https://user-images.githubusercontent.com/8617566/118020154-62549300-b31f-11eb-953d-9287f9cc27ff.png">
+
+
+**Environment info**
+- OS: Mac
+- Python version: 3.9.0
+- Sphinx version: 4.0.1
+- Sphinx extensions:  ["sphinx.ext.autodoc", "sphinx.ext.autosummary", "sphinx.ext.intersphinx", "autodocsumm"]
+- Extra tools: Browser Firefox.
+
+**Additional context**
+N/A
+
+
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll list the top-level files of the provided project to find the relevant Sphinx/conf and source files so I can inspect the docstring handling. Once I see the structure I'll search for the problematic docstring and the Sphinx configuration in the next step.
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+total 524
+drwxrwxrwx  1 root root   4096 Sep 10 16:10 .
+drwxr-xr-x  1 root root   4096 Oct  4 19:45 ..
+drwxr-xr-x  2 root root   4096 Sep 10 16:08 .circleci
+-rw-r--r--  1 root root    129 Sep 10 16:08 .codecov.yml
+drwxrwxrwx  8 root root   4096 Sep 10 16:10 .git
+drwxrwxrwx  4 root root   4096 Sep 10 16:08 .github
+-rw-r--r--  1 root root    340 Sep 10 16:08 .gitignore
+-rw-r--r--  1 root root    135 Sep 10 16:08 .readthedocs.yml
+-rw-r--r--  1 root root   4057 Sep 10 16:08 AUTHORS
+-rw-r--r--  1 root root 279368 Sep 10 16:08 CHANGES
+-rw-r--r--  1 root root  42125 Sep 10 16:08 CHANGES.old
+-rw-r--r--  1 root root   3530 Sep 10 16:08 CODE_OF_CONDUCT
+-rw-r--r--  1 root root    591 Sep 10 16:08 CONTRIBUTING.rst
+-rw-r--r--  1 root root  24754 Sep 10 16:08 EXAMPLES
+-rw-r--r--  1 root root   8998 Sep 10 16:08 LICENSE
+-rw-r--r--  1 root root    842 Sep 10 16:08 MANIFEST.in
+-rw-r--r--  1 root root   1760 Sep 10 16:08 Makefile
+-rw-r--r--  1 root root   4396 Sep 10 16:08 README.rst
+drwxr-xr-x  2 root root   4096 Sep 10 16:10 Sphinx.egg-info
+-rw-r--r--  1 root root    874 Sep 10 16:08 babel.cfg
+-rw-r--r--  1 root root    704 Sep 10 16:08 bindep.txt
+drwxrwxrwx 10 root root   4096 Sep 10 16:08 doc
+-rw-r--r--  1 root root   1894 Sep 10 16:08 karma.conf.js
+-rw-r--r--  1 root root  45178 Sep 10 16:08 package-lock.json
+-rw-r--r--  1 root root    485 Sep 10 16:08 package.json
+-rw-r--r--  1 root root   1717 Sep 10 16:08 setup.cfg
+-rw-r--r--  1 root root   8491 Sep 10 16:10 setup.py
+drwxrwxrwx 20 root root   4096 Sep 10 16:10 sphinx
+drwxrwxrwx  5 root root   4096 Sep 10 16:08 tests
+-rw-r--r--  1 root root   2129 Sep 10 16:10 tox.ini
+drwxrwxrwx  2 root root   4096 Sep 10 16:08 utils
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll search the repository for the exact problematic type string to find where parsing/rendering might mishandle "dict(str, str)". 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+dict(str, str)
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I will search the repository for occurrences of "opc_meta" to locate the example or relevant docstring code. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+opc_meta
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I'll search the repository for napoleon-related code (which handles Google/NumPy-style docstrings) to inspect how parameter type parsing like "dict(str, str)" is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+napoleon
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+./tests/test_ext_napoleon_docstring.py:2:    test_napoleon_docstring
+./tests/test_ext_napoleon_docstring.py:5:    Tests for :mod:`sphinx.ext.napoleon.docstring` module.
+./tests/test_ext_napoleon_docstring.py:22:from sphinx.ext.napoleon import Config
+./tests/test_ext_napoleon_docstring.py:23:from sphinx.ext.napoleon.docstring import (GoogleDocstring, NumpyDocstring,
+./tests/test_ext_napoleon_docstring.py:28:    from .ext_napoleon_pep526_data_google import PEP526GoogleClass
+./tests/test_ext_napoleon_docstring.py:29:    from .ext_napoleon_pep526_data_numpy import PEP526NumpyClass
+./tests/test_ext_napoleon_docstring.py:400:            napoleon_use_param=False,
+./tests/test_ext_napoleon_docstring.py:401:            napoleon_use_rtype=False,
+./tests/test_ext_napoleon_docstring.py:402:            napoleon_use_keyword=False
+./tests/test_ext_napoleon_docstring.py:962:        config = Config(napoleon_use_param=True)
+./tests/test_ext_napoleon_docstring.py:1058:        config = Config(napoleon_use_param=False)
+./tests/test_ext_napoleon_docstring.py:1092:        testConfig = Config(napoleon_custom_sections=['Really Important Details',
+./tests/test_ext_napoleon_docstring.py:1149:                napoleon_attr_annotations=True
+./tests/test_ext_napoleon_docstring.py:1185:        config = Config(napoleon_preprocess_types=True)
+./tests/test_ext_napoleon_docstring.py:1449:            napoleon_use_param=False,
+./tests/test_ext_napoleon_docstring.py:1450:            napoleon_use_rtype=False,
+./tests/test_ext_napoleon_docstring.py:1451:            napoleon_use_keyword=False,
+./tests/test_ext_napoleon_docstring.py:1452:            napoleon_preprocess_types=True)
+./tests/test_ext_napoleon_docstring.py:1469:        config = Config(napoleon_preprocess_types=False, napoleon_use_param=False)
+./tests/test_ext_napoleon_docstring.py:1491:        config = Config(napoleon_use_param=False)
+./tests/test_ext_napoleon_docstring.py:1500:        config = Config(napoleon_use_param=True)
+./tests/test_ext_napoleon_docstring.py:1520:        config = Config(napoleon_use_param=False)
+./tests/test_ext_napoleon_docstring.py:1527:        config = Config(napoleon_use_param=True)
+./tests/test_ext_napoleon_docstring.py:1545:        config = Config(napoleon_use_param=False)
+./tests/test_ext_napoleon_docstring.py:1552:        config = Config(napoleon_use_param=True)
+./tests/test_ext_napoleon_docstring.py:1624:        config = Config(napoleon_type_aliases=translations)
+./tests/test_ext_napoleon_docstring.py:1677:        config = Config(napoleon_use_ivar=True)
+./tests/test_ext_napoleon_docstring.py:1697:        config = Config(napoleon_use_ivar=True)
+./tests/test_ext_napoleon_docstring.py:1719:            napoleon_use_param=True,
+./tests/test_ext_napoleon_docstring.py:1720:            napoleon_use_rtype=True,
+./tests/test_ext_napoleon_docstring.py:1721:            napoleon_preprocess_types=True,
+./tests/test_ext_napoleon_docstring.py:1722:            napoleon_type_aliases=translations,
+./tests/test_ext_napoleon_docstring.py:1745:        config = Config(napoleon_type_aliases=translations, napoleon_preprocess_types=True)
+./tests/test_ext_napoleon_docstring.py:1958:            config = Config(napoleon_type_aliases=translations, napoleon_preprocess_types=True)
+./tests/test_ext_napoleon_docstring.py:2227:        config = Config(napoleon_use_param=True)
+./tests/test_ext_napoleon_docstring.py:2319:        config = Config(napoleon_use_param=False, napoleon_preprocess_types=True)
+./tests/test_ext_napoleon_docstring.py:2498:            napoleon_use_param=True,
+./tests/test_ext_napoleon_docstring.py:2499:            napoleon_use_rtype=True,
+./tests/test_ext_napoleon_docstring.py:2500:            napoleon_preprocess_types=True,
+./tests/test_ext_napoleon_docstring.py:2501:            napoleon_type_aliases=translations,
+./tests/test_ext_napoleon_docstring.py:2560:                napoleon_attr_annotations=True
+./tests/test_ext_napoleon.py:2:    test_napoleon
+./tests/test_ext_napoleon.py:5:    Tests for :mod:`sphinx.ext.napoleon.__init__` module.
+./tests/test_ext_napoleon.py:17:from sphinx.ext.napoleon import Config, _process_docstring, _skip_member, setup
+./tests/test_ext_napoleon.py:149:                            'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:157:                            'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:162:                        'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:167:                        'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:172:                        'napoleon_include_special_with_doc')
+./tests/test_ext_napoleon.py:177:                        'napoleon_include_special_with_doc')
+./tests/test_ext_napoleon.py:182:                        'napoleon_include_special_with_doc')
+./tests/test_ext_napoleon.py:187:                        'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:192:                        'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:197:                        'napoleon_include_special_with_doc')
+./tests/test_ext_napoleon.py:202:                        'napoleon_include_special_with_doc')
+./tests/test_ext_napoleon.py:206:                        'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:210:                        'napoleon_include_private_with_doc')
+./tests/test_ext_napoleon.py:214:                        'napoleon_include_special_with_doc')
+./tests/test_ext_napoleon.py:218:                        'napoleon_include_special_with_doc')
+./tests/ext_napoleon_pep526_data_google.py:2:Test module for napoleon PEP 526 compatiblity with google style
+./tests/test_ext_napoleon_iterators.py:2:    test_napoleon_iterators
+./tests/test_ext_napoleon_iterators.py:5:    Tests for :mod:`sphinx.ext.napoleon.iterators` module.
+./tests/test_ext_napoleon_iterators.py:14:from sphinx.ext.napoleon.iterators import modify_iter, peek_iter
+./tests/ext_napoleon_pep526_data_numpy.py:2:Test module for napoleon PEP 526 compatiblity with numpy style
+./Sphinx.egg-info/SOURCES.txt:148:doc/usage/extensions/napoleon.rst
+./Sphinx.egg-info/SOURCES.txt:260:sphinx/ext/napoleon/__init__.py
+./Sphinx.egg-info/SOURCES.txt:261:sphinx/ext/napoleon/docstring.py
+./Sphinx.egg-info/SOURCES.txt:262:sphinx/ext/napoleon/iterators.py
+./Sphinx.egg-info/SOURCES.txt:688:tests/ext_napoleon_pep526_data_google.py
+./Sphinx.egg-info/SOURCES.txt:689:tests/ext_napoleon_pep526_data_numpy.py
+./Sphinx.egg-info/SOURCES.txt:748:tests/test_ext_napoleon.py
+./Sphinx.egg-info/SOURCES.txt:749:tests/test_ext_napoleon_docstring.py
+./Sphinx.egg-info/SOURCES.txt:750:tests/test_ext_napoleon_iterators.py
+./doc/usage/extensions/example_google.py:267:        ``napoleon_include_special_with_doc`` is set to True.
+./doc/usage/extensions/example_google.py:272:            napoleon_include_special_with_doc = True
+./doc/usage/extensions/example_google.py:290:            napoleon_include_private_with_doc = True
+./doc/usage/extensions/example_google.py:303:    function's ``Args`` section. If ``napoleon_attr_annotations``
+./doc/usage/extensions/example_numpy.py:326:        ``napoleon_include_special_with_doc`` is set to True.
+./doc/usage/extensions/example_numpy.py:331:            napoleon_include_special_with_doc = True
+./doc/usage/extensions/example_numpy.py:349:            napoleon_include_private_with_doc = True
+./doc/usage/extensions/autodoc.rst:39:you can also enable the :mod:`napoleon <sphinx.ext.napoleon>` extension.
+./doc/usage/extensions/autodoc.rst:40::mod:`napoleon <sphinx.ext.napoleon>` is a preprocessor that converts your
+./doc/usage/extensions/napoleon.rst:1::mod:`sphinx.ext.napoleon` -- Support for NumPy and Google style docstrings
+./doc/usage/extensions/napoleon.rst:4:.. module:: sphinx.ext.napoleon
+./doc/usage/extensions/napoleon.rst:67:   enable napoleon in the Sphinx `conf.py` file::
+./doc/usage/extensions/napoleon.rst:71:       # Add napoleon to the extensions list
+./doc/usage/extensions/napoleon.rst:72:       extensions = ['sphinx.ext.napoleon']
+./doc/usage/extensions/napoleon.rst:283:Listed below are all the settings used by napoleon and their default
+./doc/usage/extensions/napoleon.rst:285:sure that "sphinx.ext.napoleon" is enabled in `conf.py`::
+./doc/usage/extensions/napoleon.rst:290:    extensions = ['sphinx.ext.napoleon']
+./doc/usage/extensions/napoleon.rst:293:    napoleon_google_docstring = True
+./doc/usage/extensions/napoleon.rst:294:    napoleon_numpy_docstring = True
+./doc/usage/extensions/napoleon.rst:295:    napoleon_include_init_with_doc = False
+./doc/usage/extensions/napoleon.rst:296:    napoleon_include_private_with_doc = False
+./doc/usage/extensions/napoleon.rst:297:    napoleon_include_special_with_doc = True
+./doc/usage/extensions/napoleon.rst:298:    napoleon_use_admonition_for_examples = False
+./doc/usage/extensions/napoleon.rst:299:    napoleon_use_admonition_for_notes = False
+./doc/usage/extensions/napoleon.rst:300:    napoleon_use_admonition_for_references = False
+./doc/usage/extensions/napoleon.rst:301:    napoleon_use_ivar = False
+./doc/usage/extensions/napoleon.rst:302:    napoleon_use_param = True
+./doc/usage/extensions/napoleon.rst:303:    napoleon_use_rtype = True
+./doc/usage/extensions/napoleon.rst:304:    napoleon_preprocess_types = False
+./doc/usage/extensions/napoleon.rst:305:    napoleon_type_aliases = None
+./doc/usage/extensions/napoleon.rst:306:    napoleon_attr_annotations = True
+./doc/usage/extensions/napoleon.rst:313:.. confval:: napoleon_google_docstring
+./doc/usage/extensions/napoleon.rst:318:.. confval:: napoleon_numpy_docstring
+./doc/usage/extensions/napoleon.rst:323:.. confval:: napoleon_include_init_with_doc
+./doc/usage/extensions/napoleon.rst:340:.. confval:: napoleon_include_private_with_doc
+./doc/usage/extensions/napoleon.rst:358:.. confval:: napoleon_include_special_with_doc
+./doc/usage/extensions/napoleon.rst:376:.. confval:: napoleon_use_admonition_for_examples
+./doc/usage/extensions/napoleon.rst:401:.. confval:: napoleon_use_admonition_for_notes
+./doc/usage/extensions/napoleon.rst:411:      :attr:`napoleon_use_admonition_for_examples`
+./doc/usage/extensions/napoleon.rst:413:.. confval:: napoleon_use_admonition_for_references
+./doc/usage/extensions/napoleon.rst:421:      :attr:`napoleon_use_admonition_for_examples`
+./doc/usage/extensions/napoleon.rst:423:.. confval:: napoleon_use_ivar
+./doc/usage/extensions/napoleon.rst:448:.. confval:: napoleon_use_param
+./doc/usage/extensions/napoleon.rst:477:.. confval:: napoleon_use_keyword
+./doc/usage/extensions/napoleon.rst:484:   This behaves similarly to  :attr:`napoleon_use_param`. Note unlike docutils,
+./doc/usage/extensions/napoleon.rst:491:      :attr:`napoleon_use_param`
+./doc/usage/extensions/napoleon.rst:493:.. confval:: napoleon_use_rtype
+./doc/usage/extensions/napoleon.rst:514:.. confval:: napoleon_preprocess_types
+./doc/usage/extensions/napoleon.rst:524:.. confval:: napoleon_type_aliases
+./doc/usage/extensions/napoleon.rst:527:   only when ``napoleon_use_param = True``. *Defaults to None.*
+./doc/usage/extensions/napoleon.rst:531:       napoleon_type_aliases = {
+./doc/usage/extensions/napoleon.rst:554:.. confval:: napoleon_attr_annotations
+./doc/usage/extensions/napoleon.rst:562:.. confval:: napoleon_custom_sections
+./doc/usage/extensions/index.rst:36:   napoleon
+./AUTHORS:48:* Martin Larralde -- additional napoleon admonitions
+./AUTHORS:66:* Rob Ruana -- napoleon extension
+./AUTHORS:72:* Filip Vavera -- napoleon todo directive
+grep: ./.git/index: binary file matches
+grep: ./.git/objects/pack/pack-22e05527544ac6a8dc7a91003db6f35747b693e4.pack: binary file matches
+./CHANGES:139:* #5560: napoleon: :confval:`napoleon_use_param` also affect "other parameters"
+./CHANGES:404:* #8573: napoleon: Allow to change the style of custom sections using
+./CHANGES:405:  :confval:`napoleon_custom_styles`
+./CHANGES:406:* #8004: napoleon: Type definitions in Google style docstrings are rendered as
+./CHANGES:407:  references when :confval:`napoleon_preprocess_types` enabled
+./CHANGES:585:* #8285: napoleon: Add :confval:`napoleon_attr_annotations` to merge type hints
+./CHANGES:587:* #8236: napoleon: Support numpydoc's "Receives" section
+./CHANGES:681:* #8051: napoleon: use the obj role for all See Also items
+./CHANGES:682:* #8050: napoleon: Apply :confval:`napoleon_preprocess_types` to every field
+./CHANGES:705:* #8192: napoleon: description is disappeared when it contains inline literals
+./CHANGES:706:* #8142: napoleon: Potential of regex denial of service in google style docs
+./CHANGES:748:* #8095: napoleon: Add :confval:`napoleon_preprocess_types` to enable the type
+./CHANGES:755:* #8074: napoleon: Crashes during processing C-ext module
+./CHANGES:756:* #8088: napoleon: "Inline literal start-string without end-string" warning in
+./CHANGES:790:* #7888: napoleon: Add aliases Warn and Raise.
+./CHANGES:791:* #7690: napoleon: parse type strings and make them hyperlinks as possible.  The
+./CHANGES:792:  conversion rule can be updated via :confval:`napoleon_type_aliases`
+./CHANGES:793:* #8049: napoleon: Create a hyperlink for each the type of parameter when
+./CHANGES:794:  :confval:`napoleon_use_params` is False
+./CHANGES:842:* #4258: napoleon: decorated special methods are not shown
+./CHANGES:843:* #7799: napoleon: parameters are not escaped for combined params in numpydoc
+./CHANGES:844:* #7780: napoleon: multiple paramaters declaration in numpydoc was wrongly
+./CHANGES:845:  recognized when napoleon_use_params=True
+./CHANGES:908:* #7808: napoleon: a type for attribute are represented as typed field
+./CHANGES:926:* #7808: napoleon: Warnings raised on variable and attribute type annotations
+./CHANGES:1018:* #7582: napoleon: a type for attribute are represented like type annotation
+./CHANGES:1019:* #7734: napoleon: overescaped trailing underscore on attribute
+./CHANGES:1069:* #7581: napoleon: bad parsing of inline code in attribute docstrings
+./CHANGES:1327:* #6240: napoleon: Attributes and Methods sections ignore :noindex: option
+./CHANGES:1476:* #6999: napoleon: fails to parse tilde in :exc: role
+./CHANGES:1731:* #6455: napoleon: docstrings for properties are not processed
+./CHANGES:1732:* #6436: napoleon: "Unknown target name" error if variable name ends with
+./CHANGES:1893:* #6220, #6225: napoleon: AttributeError is raised for raised section having
+./CHANGES:2545:* #4785: napoleon: Add strings to translation file for localisation
+./CHANGES:2641:* #5115: napoleon: add admonitions added by #4613 to the docs.
+./CHANGES:2722:* #5076: napoleon raises RuntimeError with python 3.7
+./CHANGES:2773:  napoleon module
+./CHANGES:3136:* #4221: napoleon depends on autodoc, but users need to load it manually
+./CHANGES:4427:* #2092: add todo directive support in napoleon package.
+./CHANGES:4978:* Added ``sphinx.ext.napoleon`` extension for NumPy and Google style docstring
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/eo/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:1857:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3035:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3039:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3043:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3047:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3051:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3055:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3059:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3076:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3081:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/zh_CN/LC_MESSAGES/sphinx.po:3086:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/uk_UA/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/nb_NO/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:1846:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3065:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3070:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/fa/LC_MESSAGES/sphinx.po:3075:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/cak/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:1846:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3065:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3070:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/hi/LC_MESSAGES/sphinx.po:3075:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sr/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ne/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/si/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:1846:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3065:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3070:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/pl/LC_MESSAGES/sphinx.po:3075:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:1848:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/nl/LC_MESSAGES/sphinx.po:3077:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/te/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:1866:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3064:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3076:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3080:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3085:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3090:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/fr/LC_MESSAGES/sphinx.po:3095:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:1848:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ru/LC_MESSAGES/sphinx.po:3077:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/vi/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sq/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ko/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:1848:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/zh_TW/LC_MESSAGES/sphinx.po:3077:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sphinx.pot:1860:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sphinx.pot:3041:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sphinx.pot:3045:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sphinx.pot:3049:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sphinx.pot:3053:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sphinx.pot:3057:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sphinx.pot:3061:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sphinx.pot:3065:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sphinx.pot:3069:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sphinx.pot:3073:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sphinx.pot:3077:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sphinx.pot:3082:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sphinx.pot:3087:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sphinx.pot:3092:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ur/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/cy/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/he/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/lv/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/lt/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/pt_PT/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/hr/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/cs/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:1846:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3065:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3070:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/tr/LC_MESSAGES/sphinx.po:3075:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:1847:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/id/LC_MESSAGES/sphinx.po:3076:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:1848:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/pt_BR/LC_MESSAGES/sphinx.po:3077:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:1848:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/hu/LC_MESSAGES/sphinx.po:3077:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:1845:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3023:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3027:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3031:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3035:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3039:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3043:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3047:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3051:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3055:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3059:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3064:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3069:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/el/LC_MESSAGES/sphinx.po:3074:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/bn/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ar/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/fi/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sl/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/mk/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:1847:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/it/LC_MESSAGES/sphinx.po:3076:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/eu/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:1846:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3065:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3070:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/da/LC_MESSAGES/sphinx.po:3075:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:1846:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3065:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3070:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/et/LC_MESSAGES/sphinx.po:3075:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:1857:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3035:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3039:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3043:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3047:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3051:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3055:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3059:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3076:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3081:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ja/LC_MESSAGES/sphinx.po:3086:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ca/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/bg/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/pt/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:1849:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3027:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3031:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3035:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3039:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3043:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3047:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3051:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3055:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3059:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/es/LC_MESSAGES/sphinx.po:3078:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:1845:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3023:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3027:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3031:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3035:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3039:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3043:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3047:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3051:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3055:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3059:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3064:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3069:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sk/LC_MESSAGES/sphinx.po:3074:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:1844:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3022:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3026:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3030:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3034:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3038:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3042:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3046:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3050:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3054:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3058:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3063:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3068:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ro/LC_MESSAGES/sphinx.po:3073:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:1846:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3060:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3065:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3070:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/de/LC_MESSAGES/sphinx.po:3075:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:1843:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3021:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3025:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3029:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3033:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3037:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3041:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3045:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3049:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3053:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3057:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3062:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3067:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/ta/LC_MESSAGES/sphinx.po:3072:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:1842:#: sphinx/domains/python.py:369 sphinx/ext/napoleon/docstring.py:736
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3020:#: sphinx/ext/napoleon/__init__.py:347 sphinx/ext/napoleon/docstring.py:703
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3024:#: sphinx/ext/napoleon/docstring.py:657
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3028:#: sphinx/ext/napoleon/docstring.py:658
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3032:#: sphinx/ext/napoleon/docstring.py:718
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3036:#: sphinx/ext/napoleon/docstring.py:727
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3040:#: sphinx/ext/napoleon/docstring.py:763
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3044:#: sphinx/ext/napoleon/docstring.py:767
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3048:#: sphinx/ext/napoleon/docstring.py:801
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3052:#: sphinx/ext/napoleon/docstring.py:805
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3056:#: sphinx/ext/napoleon/docstring.py:973
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3061:#: sphinx/ext/napoleon/docstring.py:980
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3066:#: sphinx/ext/napoleon/docstring.py:987
+./sphinx/locale/sv/LC_MESSAGES/sphinx.po:3071:#: sphinx/ext/napoleon/docstring.py:994
+./sphinx/ext/napoleon/iterators.py:2:    sphinx.ext.napoleon.iterators
+./sphinx/ext/napoleon/__init__.py:2:    sphinx.ext.napoleon
+./sphinx/ext/napoleon/__init__.py:15:from sphinx.ext.napoleon.docstring import GoogleDocstring, NumpyDocstring
+./sphinx/ext/napoleon/__init__.py:20:    """Sphinx napoleon extension settings in `conf.py`.
+./sphinx/ext/napoleon/__init__.py:22:    Listed below are all the settings used by napoleon and their default
+./sphinx/ext/napoleon/__init__.py:24:    sure that "sphinx.ext.napoleon" is enabled in `conf.py`::
+./sphinx/ext/napoleon/__init__.py:29:        extensions = ['sphinx.ext.napoleon']
+./sphinx/ext/napoleon/__init__.py:32:        napoleon_google_docstring = True
+./sphinx/ext/napoleon/__init__.py:33:        napoleon_numpy_docstring = True
+./sphinx/ext/napoleon/__init__.py:34:        napoleon_include_init_with_doc = False
+./sphinx/ext/napoleon/__init__.py:35:        napoleon_include_private_with_doc = False
+./sphinx/ext/napoleon/__init__.py:36:        napoleon_include_special_with_doc = False
+./sphinx/ext/napoleon/__init__.py:37:        napoleon_use_admonition_for_examples = False
+./sphinx/ext/napoleon/__init__.py:38:        napoleon_use_admonition_for_notes = False
+./sphinx/ext/napoleon/__init__.py:39:        napoleon_use_admonition_for_references = False
+./sphinx/ext/napoleon/__init__.py:40:        napoleon_use_ivar = False
+./sphinx/ext/napoleon/__init__.py:41:        napoleon_use_param = True
+./sphinx/ext/napoleon/__init__.py:42:        napoleon_use_rtype = True
+./sphinx/ext/napoleon/__init__.py:43:        napoleon_use_keyword = True
+./sphinx/ext/napoleon/__init__.py:44:        napoleon_preprocess_types = False
+./sphinx/ext/napoleon/__init__.py:45:        napoleon_type_aliases = None
+./sphinx/ext/napoleon/__init__.py:46:        napoleon_custom_sections = None
+./sphinx/ext/napoleon/__init__.py:47:        napoleon_attr_annotations = True
+./sphinx/ext/napoleon/__init__.py:56:    napoleon_google_docstring : :obj:`bool` (Defaults to True)
+./sphinx/ext/napoleon/__init__.py:59:    napoleon_numpy_docstring : :obj:`bool` (Defaults to True)
+./sphinx/ext/napoleon/__init__.py:62:    napoleon_include_init_with_doc : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:78:    napoleon_include_private_with_doc : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:94:    napoleon_include_special_with_doc : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:111:    napoleon_use_admonition_for_examples : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:135:    napoleon_use_admonition_for_notes : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:146:        :attr:`napoleon_use_admonition_for_examples`
+./sphinx/ext/napoleon/__init__.py:148:    napoleon_use_admonition_for_references : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:154:        :attr:`napoleon_use_admonition_for_examples`
+./sphinx/ext/napoleon/__init__.py:156:    napoleon_use_ivar : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:180:    napoleon_use_param : :obj:`bool` (Defaults to True)
+./sphinx/ext/napoleon/__init__.py:207:    napoleon_use_keyword : :obj:`bool` (Defaults to True)
+./sphinx/ext/napoleon/__init__.py:212:        This behaves similarly to  :attr:`napoleon_use_param`. Note unlike
+./sphinx/ext/napoleon/__init__.py:220:        :attr:`napoleon_use_param`
+./sphinx/ext/napoleon/__init__.py:222:    napoleon_use_rtype : :obj:`bool` (Defaults to True)
+./sphinx/ext/napoleon/__init__.py:242:    napoleon_preprocess_types : :obj:`bool` (Defaults to False)
+./sphinx/ext/napoleon/__init__.py:245:    napoleon_type_aliases : :obj:`dict` (Defaults to None)
+./sphinx/ext/napoleon/__init__.py:247:        style docstrings. Only works if ``napoleon_preprocess_types = True``.
+./sphinx/ext/napoleon/__init__.py:249:    napoleon_custom_sections : :obj:`list` (Defaults to None)
+./sphinx/ext/napoleon/__init__.py:266:    napoleon_attr_annotations : :obj:`bool` (Defaults to True)
+./sphinx/ext/napoleon/__init__.py:272:        'napoleon_google_docstring': (True, 'env'),
+./sphinx/ext/napoleon/__init__.py:273:        'napoleon_numpy_docstring': (True, 'env'),
+./sphinx/ext/napoleon/__init__.py:274:        'napoleon_include_init_with_doc': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:275:        'napoleon_include_private_with_doc': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:276:        'napoleon_include_special_with_doc': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:277:        'napoleon_use_admonition_for_examples': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:278:        'napoleon_use_admonition_for_notes': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:279:        'napoleon_use_admonition_for_references': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:280:        'napoleon_use_ivar': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:281:        'napoleon_use_param': (True, 'env'),
+./sphinx/ext/napoleon/__init__.py:282:        'napoleon_use_rtype': (True, 'env'),
+./sphinx/ext/napoleon/__init__.py:283:        'napoleon_use_keyword': (True, 'env'),
+./sphinx/ext/napoleon/__init__.py:284:        'napoleon_preprocess_types': (False, 'env'),
+./sphinx/ext/napoleon/__init__.py:285:        'napoleon_type_aliases': (None, 'env'),
+./sphinx/ext/napoleon/__init__.py:286:        'napoleon_custom_sections': (None, 'env'),
+./sphinx/ext/napoleon/__init__.py:287:        'napoleon_attr_annotations': (True, 'env'),
+./sphinx/ext/napoleon/__init__.py:364:    * ``napoleon_google_docstring`` -- parse Google style docstrings
+./sphinx/ext/napoleon/__init__.py:365:    * ``napoleon_numpy_docstring`` -- parse NumPy style docstrings
+./sphinx/ext/napoleon/__init__.py:392:    if app.config.napoleon_numpy_docstring:
+./sphinx/ext/napoleon/__init__.py:396:    if app.config.napoleon_google_docstring:
+./sphinx/ext/napoleon/__init__.py:410:    * ``napoleon_include_init_with_doc`` --
+./sphinx/ext/napoleon/__init__.py:412:    * ``napoleon_include_private_with_doc`` --
+./sphinx/ext/napoleon/__init__.py:414:    * ``napoleon_include_special_with_doc`` --
+./sphinx/ext/napoleon/__init__.py:478:            inc_init = app.config.napoleon_include_init_with_doc
+./sphinx/ext/napoleon/__init__.py:479:            inc_special = app.config.napoleon_include_special_with_doc
+./sphinx/ext/napoleon/__init__.py:480:            inc_private = app.config.napoleon_include_private_with_doc
+./sphinx/ext/napoleon/docstring.py:2:    sphinx.ext.napoleon.docstring
+./sphinx/ext/napoleon/docstring.py:21:from sphinx.ext.napoleon.iterators import modify_iter
+./sphinx/ext/napoleon/docstring.py:78:    config: :obj:`sphinx.ext.napoleon.Config` or :obj:`sphinx.config.Config`
+./sphinx/ext/napoleon/docstring.py:81:        a new :class:`sphinx.ext.napoleon.Config` object.
+./sphinx/ext/napoleon/docstring.py:105:    >>> from sphinx.ext.napoleon import Config
+./sphinx/ext/napoleon/docstring.py:106:    >>> config = Config(napoleon_use_param=True, napoleon_use_rtype=True)
+./sphinx/ext/napoleon/docstring.py:143:            from sphinx.ext.napoleon import Config
+./sphinx/ext/napoleon/docstring.py:277:        if _type and self._config.napoleon_preprocess_types:
+./sphinx/ext/napoleon/docstring.py:278:            _type = _convert_type_spec(_type, self._config.napoleon_type_aliases or {})
+./sphinx/ext/napoleon/docstring.py:324:                    self._config.napoleon_preprocess_types):
+./sphinx/ext/napoleon/docstring.py:325:                _type = _convert_type_spec(_type, self._config.napoleon_type_aliases or {})
+./sphinx/ext/napoleon/docstring.py:561:        if self._config.napoleon_custom_sections is not None:
+./sphinx/ext/napoleon/docstring.py:562:            for entry in self._config.napoleon_custom_sections:
+./sphinx/ext/napoleon/docstring.py:633:            if self._config.napoleon_use_ivar:
+./sphinx/ext/napoleon/docstring.py:651:        if self._config.napoleon_use_ivar:
+./sphinx/ext/napoleon/docstring.py:660:        use_admonition = self._config.napoleon_use_admonition_for_examples
+./sphinx/ext/napoleon/docstring.py:697:        if self._config.napoleon_use_keyword:
+./sphinx/ext/napoleon/docstring.py:717:        use_admonition = self._config.napoleon_use_admonition_for_notes
+./sphinx/ext/napoleon/docstring.py:721:        if self._config.napoleon_use_param:
+./sphinx/ext/napoleon/docstring.py:730:        if self._config.napoleon_use_param:
+./sphinx/ext/napoleon/docstring.py:757:        if self._config.napoleon_use_param:
+./sphinx/ext/napoleon/docstring.py:766:        use_admonition = self._config.napoleon_use_admonition_for_references
+./sphinx/ext/napoleon/docstring.py:775:            use_rtype = self._config.napoleon_use_rtype
+./sphinx/ext/napoleon/docstring.py:860:        if self._config.napoleon_attr_annotations:
+./sphinx/ext/napoleon/docstring.py:866:                                   self._config, "napoleon_type_aliases", {}
+./sphinx/ext/napoleon/docstring.py:1055:    config: :obj:`sphinx.ext.napoleon.Config` or :obj:`sphinx.config.Config`
+./sphinx/ext/napoleon/docstring.py:1058:        a new :class:`sphinx.ext.napoleon.Config` object.
+./sphinx/ext/napoleon/docstring.py:1082:    >>> from sphinx.ext.napoleon import Config
+./sphinx/ext/napoleon/docstring.py:1083:    >>> config = Config(napoleon_use_param=True, napoleon_use_rtype=True)
+./sphinx/ext/napoleon/docstring.py:1184:        if self._config.napoleon_preprocess_types:
+./sphinx/ext/napoleon/docstring.py:1188:                translations=self._config.napoleon_type_aliases or {},
+./sphinx/ext/napoleon/docstring.py:1268:            translations = self._config.napoleon_type_aliases
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll locate the function that preprocesses type specs (likely _convert_type_spec) in napoleon to inspect how "dict(str, str)" is parsed. 
+----BEGIN_FUNCTION_CALL----
+search_in_file
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+pattern
+_convert_type_spec
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+57:def _convert_type_spec(_type: str, translations: Dict[str, str] = {}) -> str:
+278:            _type = _convert_type_spec(_type, self._config.napoleon_type_aliases or {})
+325:                _type = _convert_type_spec(_type, self._config.napoleon_type_aliases or {})
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I will open the napoleon docstring module to inspect the _convert_type_spec implementation and nearby code. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+220
+----ARG----
+highlight_whitespace
+False
+----END_FUNCTION_CALL----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+·····1  """
+·····2      sphinx.ext.napoleon.docstring
+·····3      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+········
+········
+·····4      Classes for docstring parsing and formatting.
+········
+········
+·····5      :copyright: Copyright 2007-2021 by the Sphinx team, see AUTHORS.
+·····6      :license: BSD, see LICENSE for details.
+·····7  """
+········
+·····8  import collections
+·····9  import inspect
+····10  import re
+····11  from functools import partial
+····12  from typing import Any, Callable, Dict, List, Tuple, Type, Union
+········
+····13  from sphinx.application import Sphinx
+····14  from sphinx.config import Config as SphinxConfig
+····15  from sphinx.ext.napoleon.iterators import modify_iter
+····16  from sphinx.locale import _, __
+····17  from sphinx.util import logging
+····18  from sphinx.util.inspect import stringify_annotation
+····19  from sphinx.util.typing import get_type_hints
+········
+····20  logger = logging.getLogger(__name__)
+········
+····21  _directive_regex = re.compile(r'\.\. \S+::')
+····22  _google_section_regex = re.compile(r'^(\s|\w)+:\s*$')
+····23  _google_typed_arg_regex = re.compile(r'(.+?)\(\s*(.*[^\s]+)\s*\)')
+····24  _numpy_section_regex = re.compile(r'^[=\-`:\'"~^_*+#<>]{2,}\s*$')
+····25  _single_colon_regex = re.compile(r'(?<!:):(?!:)')
+····26  _xref_or_code_regex = re.compile(
+····27      r'((?::(?:[a-zA-Z0-9]+[\-_+:.])*[a-zA-Z0-9]+:`.+?`)|'
+····28      r'(?:``.+?``))')
+····29  _xref_regex = re.compile(
+····30      r'(?:(?::(?:[a-zA-Z0-9]+[\-_+:.])*[a-zA-Z0-9]+:)?`.+?`)'
+····31  )
+····32  _bullet_list_regex = re.compile(r'^(\*|\+|\-)(\s+\S|\s*$)')
+····33  _enumerated_list_regex = re.compile(
+····34      r'^(?P<paren>\()?'
+····35      r'(\d+|#|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])'
+····36      r'(?(paren)\)|\.)(\s+\S|\s*$)')
+····37  _token_regex = re.compile(
+····38      r"(,\sor\s|\sor\s|\sof\s|:\s|\sto\s|,\sand\s|\sand\s|,\s"
+····39      r"|[{]|[}]"
+····40      r'|"(?:\\"|[^"])*"'
+····41      r"|'(?:\\'|[^'])*')"
+····42  )
+····43  _default_regex = re.compile(
+····44      r"^default[^_0-9A-Za-z].*$",
+····45  )
+····46  _SINGLETONS = ("None", "True", "False", "Ellipsis")
+········
+········
+····47  def _convert_type_spec(_type: str, translations: Dict[str, str] = {}) -> str:
+····48      """Convert type specification to reference in reST."""
+····49      if _type in translations:
+····50          return translations[_type]
+····51      else:
+····52          if _type == 'None':
+····53              return ':obj:`None`'
+····54          else:
+····55              return ':class:`%s`' % _type
+········
+····56      return _type
+········
+········
+····57  class GoogleDocstring:
+····58      """Convert Google style docstrings to reStructuredText.
+········
+····59      Parameters
+····60      ----------
+····61      docstring : :obj:`str` or :obj:`list` of :obj:`str`
+····62          The docstring to parse, given either as a string or split into
+····63          individual lines.
+····64      config: :obj:`sphinx.ext.napoleon.Config` or :obj:`sphinx.config.Config`
+····65          The configuration settings to use. If not given, defaults to the
+····66          config object on `app`; or if `app` is not given defaults to the
+····67          a new :class:`sphinx.ext.napoleon.Config` object.
+········
+········
+····68      Other Parameters
+····69      ----------------
+····70      app : :class:`sphinx.application.Sphinx`, optional
+····71          Application object representing the Sphinx process.
+····72      what : :obj:`str`, optional
+····73          A string specifying the type of the object to which the docstring
+····74          belongs. Valid values: "module", "class", "exception", "function",
+····75          "method", "attribute".
+····76      name : :obj:`str`, optional
+····77          The fully qualified name of the object.
+····78      obj : module, class, exception, function, method, or attribute
+····79          The object to which the docstring belongs.
+····80      options : :class:`sphinx.ext.autodoc.Options`, optional
+····81          The options given to the directive: an object with attributes
+····82          inherited_members, undoc_members, show_inheritance and noindex that
+····83          are True if the flag option of same name was given to the auto
+····84          directive.
+········
+········
+····85      Example
+····86      -------
+····87      >>> from sphinx.ext.napoleon import Config
+····88      >>> config = Config(napoleon_use_param=True, napoleon_use_rtype=True)
+····89      >>> docstring = '''One line summary.
+····90      ...
+····91      ... Extended description.
+····92      ...
+····93      ... Args:
+····94      ...   arg1(int): Description of `arg1`
+····95      ...   arg2(str): Description of `arg2`
+····96      ... Returns:
+····97      ...   str: Description of return value.
+····98      ... '''
+····99      >>> print(GoogleDocstring(docstring, config))
+···100      One line summary.
+···101      <BLANKLINE>
+···102      Extended description.
+···103      <BLANKLINE>
+···104      :param arg1: Description of `arg1`
+···105      :type arg1: int
+···106      :param arg2: Description of `arg2`
+···107      :type arg2: str
+···108      <BLANKLINE>
+···109      :returns: Description of return value.
+···110      :rtype: str
+···111      <BLANKLINE>
+········
+···112      """
+········
+···113      _name_rgx = re.compile(r"^\s*((?::(?P<role>\S+):)?`(?P<name>~?[a-zA-Z0-9_.-]+)`|"
+···114                             r" (?P<name2>~?[a-zA-Z0-9_.-]+))\s*", re.X)
+········
+···115      def __init__(self, docstring: Union[str, List[str]], config: SphinxConfig = None,
+···116                   app: Sphinx = None, what: str = '', name: str = '',
+···117                   obj: Any = None, options: Any = None) -> None:
+···118          self._config = config
+···119          self._app = app
+········
+···120          if not self._config:
+···121              from sphinx.ext.napoleon import Config
+···122              self._config = self._app.config if self._app else Config()  # type: ignore
+········
+···123          if not what:
+···124              if inspect.isclass(obj):
+···125                  what = 'class'
+···126              elif inspect.ismodule(obj):
+···127                  what = 'module'
+···128              elif callable(obj):
+···129                  what = 'function'
+···130              else:
+···131                  what = 'object'
+········
+···132          self._what = what
+···133          self._name = name
+···134          self._obj = obj
+···135          self._opt = options
+···136          if isinstance(docstring, str):
+···137              lines = docstring.splitlines()
+···138          else:
+···139              lines = docstring
+···140          self._line_iter = modify_iter(lines, modifier=lambda s: s.rstrip())
+···141          self._parsed_lines: List[str] = []
+···142          self._is_in_section = False
+···143          self._section_indent = 0
+···144          if not hasattr(self, '_directive_sections'):
+···145              self._directive_sections: List[str] = []
+···146          if not hasattr(self, '_sections'):
+···147              self._sections: Dict[str, Callable] = {
+···148                  'args': self._parse_parameters_section,
+···149                  'arguments': self._parse_parameters_section,
+···150                  'attention': partial(self._parse_admonition, 'attention'),
+···151                  'attributes': self._parse_attributes_section,
+···152                  'caution': partial(self._parse_admonition, 'caution'),
+···153                  'danger': partial(self._parse_admonition, 'danger'),
+···154                  'error': partial(self._parse_admonition, 'error'),
+···155                  'example': self._parse_examples_section,
+···156                  'examples': self._parse_examples_section,
+···157                  'hint': partial(self._parse_admonition, 'hint'),
+···158                  'important': partial(self._parse_admonition, 'important'),
+···159                  'keyword args': self._parse_keyword_arguments_section,
+···160                  'keyword arguments': self._parse_keyword_arguments_section,
+···161                  'methods': self._parse_methods_section,
+···162                  'note': partial(self._parse_admonition, 'note'),
+···163                  'notes': self._parse_notes_section,
+···164                  'other parameters': self._parse_other_parameters_section,
+···165                  'parameters': self._parse_parameters_section,
+···166                  'receive': self._parse_receives_section,
+···167                  'receives': self._parse_receives_section,
+···168                  'return': self._parse_returns_section,
+···169                  'returns': self._parse_returns_section,
+···170                  'raise': self._parse_raises_section,
+···171                  'raises': self._parse_raises_section,
+···172                  'references': self._parse_references_section,
+···173                  'see also': self._parse_see_also_section,
+···174                  'tip': partial(self._parse_admonition, 'tip'),
+···175                  'todo': partial(self._parse_admonition, 'todo'),
+···176                  'warning': partial(self._parse_admonition, 'warning'),
+···177                  'warnings': partial(self._parse_admonition, 'warning'),
+···178                  'warn': self._parse_warns_section,
+···179                  'warns': self._parse_warns_section,
+···180                  'yield': self._parse_yields_section,
+···181                  'yields': self._parse_yields_section,
+···182              }
+········
+···183          self._load_custom_sections()
+········
+···184          self._parse()
+········
+···185      def __str__(self) -> str:
+···186          """Return the parsed docstring in reStructuredText format.
+········
+···187          Returns
+···188          -------
+···189          unicode
+···190              Unicode version of the docstring.
+········
+···191          """
+
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I'll inspect the napoleon docstring code around the parameter parsing and type-preprocessing logic to find where "dict(str, str)" is being split or mis-parsed. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+start_line
+220
+----ARG----
+end_line
+420
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···220          """
+···221          return '\n'.join(self.lines())
+········
+···222      def lines(self) -> List[str]:
+···223          """Return the parsed lines of the docstring in reStructuredText format.
+········
+···224          Returns
+···225          -------
+···226          list(str)
+···227              The lines of the docstring in a list.
+········
+···228          """
+···229          return self._parsed_lines
+········
+···230      def _consume_indented_block(self, indent: int = 1) -> List[str]:
+···231          lines = []
+···232          line = self._line_iter.peek()
+···233          while(not self._is_section_break() and
+···234                (not line or self._is_indented(line, indent))):
+···235              lines.append(next(self._line_iter))
+···236              line = self._line_iter.peek()
+···237          return lines
+········
+···238      def _consume_contiguous(self) -> List[str]:
+···239          lines = []
+···240          while (self._line_iter.has_next() and
+···241                 self._line_iter.peek() and
+···242                 not self._is_section_header()):
+···243              lines.append(next(self._line_iter))
+···244          return lines
+········
+···245      def _consume_empty(self) -> List[str]:
+···246          lines = []
+···247          line = self._line_iter.peek()
+···248          while self._line_iter.has_next() and not line:
+···249              lines.append(next(self._line_iter))
+···250              line = self._line_iter.peek()
+···251          return lines
+········
+···252      def _consume_field(self, parse_type: bool = True, prefer_type: bool = False
+···253                         ) -> Tuple[str, str, List[str]]:
+···254          line = next(self._line_iter)
+········
+···255          before, colon, after = self._partition_field_on_colon(line)
+···256          _name, _type, _desc = before, '', after
+········
+···257          if parse_type:
+···258              match = _google_typed_arg_regex.match(before)
+···259              if match:
+···260                  _name = match.group(1).strip()
+···261                  _type = match.group(2)
+········
+···262          _name = self._escape_args_and_kwargs(_name)
+········
+···263          if prefer_type and not _type:
+···264              _type, _name = _name, _type
+········
+···265          if _type and self._config.napoleon_preprocess_types:
+···266              _type = _convert_type_spec(_type, self._config.napoleon_type_aliases or {})
+········
+···267          indent = self._get_indent(line) + 1
+···268          _descs = [_desc] + self._dedent(self._consume_indented_block(indent))
+···269          _descs = self.__class__(_descs, self._config).lines()
+···270          return _name, _type, _descs
+········
+···271      def _consume_fields(self, parse_type: bool = True, prefer_type: bool = False,
+···272                          multiple: bool = False) -> List[Tuple[str, str, List[str]]]:
+···273          self._consume_empty()
+···274          fields = []
+···275          while not self._is_section_break():
+···276              _name, _type, _desc = self._consume_field(parse_type, prefer_type)
+···277              if multiple and _name:
+···278                  for name in _name.split(","):
+···279                      fields.append((name.strip(), _type, _desc))
+···280              elif _name or _type or _desc:
+···281                  fields.append((_name, _type, _desc,))
+···282          return fields
+········
+···283      def _consume_inline_attribute(self) -> Tuple[str, List[str]]:
+···284          line = next(self._line_iter)
+···285          _type, colon, _desc = self._partition_field_on_colon(line)
+···286          if not colon or not _desc:
+···287              _type, _desc = _desc, _type
+···288              _desc += colon
+···289          _descs = [_desc] + self._dedent(self._consume_to_end())
+···290          _descs = self.__class__(_descs, self._config).lines()
+···291          return _type, _descs
+········
+···292      def _consume_returns_section(self, preprocess_types: bool = False
+···293                                   ) -> List[Tuple[str, str, List[str]]]:
+···294          lines = self._dedent(self._consume_to_next_section())
+···295          if lines:
+···296              before, colon, after = self._partition_field_on_colon(lines[0])
+···297              _name, _type, _desc = '', '', lines
+········
+···298              if colon:
+···299                  if after:
+···300                      _desc = [after] + lines[1:]
+···301                  else:
+···302                      _desc = lines[1:]
+········
+···303                  _type = before
+········
+···304              if (_type and preprocess_types and
+···305                      self._config.napoleon_preprocess_types):
+···306                  _type = _convert_type_spec(_type, self._config.napoleon_type_aliases or {})
+········
+···307              _desc = self.__class__(_desc, self._config).lines()
+···308              return [(_name, _type, _desc,)]
+···309          else:
+···310              return []
+········
+···311      def _consume_usage_section(self) -> List[str]:
+···312          lines = self._dedent(self._consume_to_next_section())
+···313          return lines
+········
+···314      def _consume_section_header(self) -> str:
+···315          section = next(self._line_iter)
+···316          stripped_section = section.strip(':')
+···317          if stripped_section.lower() in self._sections:
+···318              section = stripped_section
+···319          return section
+········
+···320      def _consume_to_end(self) -> List[str]:
+···321          lines = []
+···322          while self._line_iter.has_next():
+···323              lines.append(next(self._line_iter))
+···324          return lines
+········
+···325      def _consume_to_next_section(self) -> List[str]:
+···326          self._consume_empty()
+···327          lines = []
+···328          while not self._is_section_break():
+···329              lines.append(next(self._line_iter))
+···330          return lines + self._consume_empty()
+········
+···331      def _dedent(self, lines: List[str], full: bool = False) -> List[str]:
+···332          if full:
+···333              return [line.lstrip() for line in lines]
+···334          else:
+···335              min_indent = self._get_min_indent(lines)
+···336              return [line[min_indent:] for line in lines]
+········
+···337      def _escape_args_and_kwargs(self, name: str) -> str:
+···338          if name.endswith('_') and getattr(self._config, 'strip_signature_backslash', False):
+···339              name = name[:-1] + r'\_'
+········
+···340          if name[:2] == '**':
+···341              return r'\*\*' + name[2:]
+···342          elif name[:1] == '*':
+···343              return r'\*' + name[1:]
+···344          else:
+···345              return name
+········
+···346      def _fix_field_desc(self, desc: List[str]) -> List[str]:
+···347          if self._is_list(desc):
+···348              desc = [''] + desc
+···349          elif desc[0].endswith('::'):
+···350              desc_block = desc[1:]
+···351              indent = self._get_indent(desc[0])
+···352              block_indent = self._get_initial_indent(desc_block)
+···353              if block_indent > indent:
+···354                  desc = [''] + desc
+···355              else:
+···356                  desc = ['', desc[0]] + self._indent(desc_block, 4)
+···357          return desc
+········
+···358      def _format_admonition(self, admonition: str, lines: List[str]) -> List[str]:
+···359          lines = self._strip_empty(lines)
+···360          if len(lines) == 1:
+···361              return ['.. %s:: %s' % (admonition, lines[0].strip()), '']
+···362          elif lines:
+···363              lines = self._indent(self._dedent(lines), 3)
+···364              return ['.. %s::' % admonition, ''] + lines + ['']
+···365          else:
+···366              return ['.. %s::' % admonition, '']
+········
+···367      def _format_block(self, prefix: str, lines: List[str], padding: str = None) -> List[str]:
+···368          if lines:
+···369              if padding is None:
+···370                  padding = ' ' * len(prefix)
+···371              result_lines = []
+···372              for i, line in enumerate(lines):
+···373                  if i == 0:
+···374                      result_lines.append((prefix + line).rstrip())
+···375                  elif line:
+···376                      result_lines.append(padding + line)
+···377                  else:
+···378                      result_lines.append('')
+···379              return result_lines
+···380          else:
+···381              return [prefix]
+········
+···382      def _format_docutils_params(self, fields: List[Tuple[str, str, List[str]]],
+···383                                  field_role: str = 'param', type_role: str = 'type'
+···384                                  ) -> List[str]:
+···385          lines = []
+···386          for _name, _type, _desc in fields:
+···387              _desc = self._strip_empty(_desc)
+···388              if any(_desc):
+···389                  _desc = self._fix_field_desc(_desc)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I'll open the rest of sphinx/ext/napoleon/docstring.py to inspect where type strings containing commas (like "dict(str, str)") are tokenized or split. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+start_line
+420
+----ARG----
+end_line
+900
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···420                  _desc = self._fix_field_desc(_desc)
+···421                  field = ':%s %s: ' % (field_role, _name)
+···422                  lines.extend(self._format_block(field, _desc))
+···423              else:
+···424                  lines.append(':%s %s:' % (field_role, _name))
+········
+···425              if _type:
+···426                  lines.append(':%s %s: %s' % (type_role, _name, _type))
+···427          return lines + ['']
+········
+···428      def _format_field(self, _name: str, _type: str, _desc: List[str]) -> List[str]:
+···429          _desc = self._strip_empty(_desc)
+···430          has_desc = any(_desc)
+···431          separator = ' -- ' if has_desc else ''
+···432          if _name:
+···433              if _type:
+···434                  if '`' in _type:
+···435                      field = '**%s** (%s)%s' % (_name, _type, separator)
+···436                  else:
+···437                      field = '**%s** (*%s*)%s' % (_name, _type, separator)
+···438              else:
+···439                  field = '**%s**%s' % (_name, separator)
+···440          elif _type:
+···441              if '`' in _type:
+···442                  field = '%s%s' % (_type, separator)
+···443              else:
+···444                  field = '*%s*%s' % (_type, separator)
+···445          else:
+···446              field = ''
+········
+···447          if has_desc:
+···448              _desc = self._fix_field_desc(_desc)
+···449              if _desc[0]:
+···450                  return [field + _desc[0]] + _desc[1:]
+···451              else:
+···452                  return [field] + _desc
+···453          else:
+···454              return [field]
+········
+···455      def _format_fields(self, field_type: str, fields: List[Tuple[str, str, List[str]]]
+···456                         ) -> List[str]:
+···457          field_type = ':%s:' % field_type.strip()
+···458          padding = ' ' * len(field_type)
+···459          multi = len(fields) > 1
+···460          lines: List[str] = []
+···461          for _name, _type, _desc in fields:
+···462              field = self._format_field(_name, _type, _desc)
+···463              if multi:
+···464                  if lines:
+···465                      lines.extend(self._format_block(padding + ' * ', field))
+···466                  else:
+···467                      lines.extend(self._format_block(field_type + ' * ', field))
+···468              else:
+···469                  lines.extend(self._format_block(field_type + ' ', field))
+···470          if lines and lines[-1]:
+···471              lines.append('')
+···472          return lines
+········
+···473      def _get_current_indent(self, peek_ahead: int = 0) -> int:
+···474          line = self._line_iter.peek(peek_ahead + 1)[peek_ahead]
+···475          while line != self._line_iter.sentinel:
+···476              if line:
+···477                  return self._get_indent(line)
+···478              peek_ahead += 1
+···479              line = self._line_iter.peek(peek_ahead + 1)[peek_ahead]
+···480          return 0
+········
+···481      def _get_indent(self, line: str) -> int:
+···482          for i, s in enumerate(line):
+···483              if not s.isspace():
+···484                  return i
+···485          return len(line)
+········
+···486      def _get_initial_indent(self, lines: List[str]) -> int:
+···487          for line in lines:
+···488              if line:
+···489                  return self._get_indent(line)
+···490          return 0
+········
+···491      def _get_min_indent(self, lines: List[str]) -> int:
+···492          min_indent = None
+···493          for line in lines:
+···494              if line:
+···495                  indent = self._get_indent(line)
+···496                  if min_indent is None:
+···497                      min_indent = indent
+···498                  elif indent < min_indent:
+···499                      min_indent = indent
+···500          return min_indent or 0
+········
+···501      def _indent(self, lines: List[str], n: int = 4) -> List[str]:
+···502          return [(' ' * n) + line for line in lines]
+········
+···503      def _is_indented(self, line: str, indent: int = 1) -> bool:
+···504          for i, s in enumerate(line):
+···505              if i >= indent:
+···506                  return True
+···507              elif not s.isspace():
+···508                  return False
+···509          return False
+········
+···510      def _is_list(self, lines: List[str]) -> bool:
+···511          if not lines:
+···512              return False
+···513          if _bullet_list_regex.match(lines[0]):
+···514              return True
+···515          if _enumerated_list_regex.match(lines[0]):
+···516              return True
+···517          if len(lines) < 2 or lines[0].endswith('::'):
+···518              return False
+···519          indent = self._get_indent(lines[0])
+···520          next_indent = indent
+···521          for line in lines[1:]:
+···522              if line:
+···523                  next_indent = self._get_indent(line)
+···524                  break
+···525          return next_indent > indent
+········
+···526      def _is_section_header(self) -> bool:
+···527          section = self._line_iter.peek().lower()
+···528          match = _google_section_regex.match(section)
+···529          if match and section.strip(':') in self._sections:
+···530              header_indent = self._get_indent(section)
+···531              section_indent = self._get_current_indent(peek_ahead=1)
+···532              return section_indent > header_indent
+···533          elif self._directive_sections:
+···534              if _directive_regex.match(section):
+···535                  for directive_section in self._directive_sections:
+···536                      if section.startswith(directive_section):
+···537                          return True
+···538          return False
+········
+···539      def _is_section_break(self) -> bool:
+···540          line = self._line_iter.peek()
+···541          return (not self._line_iter.has_next() or
+···542                  self._is_section_header() or
+···543                  (self._is_in_section and
+···544                      line and
+···545                      not self._is_indented(line, self._section_indent)))
+········
+···546      def _load_custom_sections(self) -> None:
+···547          if self._config.napoleon_custom_sections is not None:
+···548              for entry in self._config.napoleon_custom_sections:
+···549                  if isinstance(entry, str):
+···550                      # if entry is just a label, add to sections list,
+···551                      # using generic section logic.
+···552                      self._sections[entry.lower()] = self._parse_custom_generic_section
+···553                  else:
+···554                      # otherwise, assume entry is container;
+···555                      if entry[1] == "params_style":
+···556                          self._sections[entry[0].lower()] = \
+···557                              self._parse_custom_params_style_section
+···558                      elif entry[1] == "returns_style":
+···559                          self._sections[entry[0].lower()] = \
+···560                              self._parse_custom_returns_style_section
+···561                      else:
+···562                          # [0] is new section, [1] is the section to alias.
+···563                          # in the case of key mismatch, just handle as generic section.
+···564                          self._sections[entry[0].lower()] = \
+···565                              self._sections.get(entry[1].lower(),
+···566                                                 self._parse_custom_generic_section)
+········
+···567      def _parse(self) -> None:
+···568          self._parsed_lines = self._consume_empty()
+········
+···569          if self._name and self._what in ('attribute', 'data', 'property'):
+···570              # Implicit stop using StopIteration no longer allowed in
+···571              # Python 3.7; see PEP 479
+···572              res: List[str] = []
+···573              try:
+···574                  res = self._parse_attribute_docstring()
+···575              except StopIteration:
+···576                  pass
+···577              self._parsed_lines.extend(res)
+···578              return
+········
+···579          while self._line_iter.has_next():
+···580              if self._is_section_header():
+···581                  try:
+···582                      section = self._consume_section_header()
+···583                      self._is_in_section = True
+···584                      self._section_indent = self._get_current_indent()
+···585                      if _directive_regex.match(section):
+···586                          lines = [section] + self._consume_to_next_section()
+···587                      else:
+···588                          lines = self._sections[section.lower()](section)
+···589                  finally:
+···590                      self._is_in_section = False
+···591                      self._section_indent = 0
+···592              else:
+···593                  if not self._parsed_lines:
+···594                      lines = self._consume_contiguous() + self._consume_empty()
+···595                  else:
+···596                      lines = self._consume_to_next_section()
+···597              self._parsed_lines.extend(lines)
+········
+···598      def _parse_admonition(self, admonition: str, section: str) -> List[str]:
+···599          # type (str, str) -> List[str]
+···600          lines = self._consume_to_next_section()
+···601          return self._format_admonition(admonition, lines)
+········
+···602      def _parse_attribute_docstring(self) -> List[str]:
+···603          _type, _desc = self._consume_inline_attribute()
+···604          lines = self._format_field('', '', _desc)
+···605          if _type:
+···606              lines.extend(['', ':type: %s' % _type])
+···607          return lines
+········
+···608      def _parse_attributes_section(self, section: str) -> List[str]:
+···609          lines = []
+···610          for _name, _type, _desc in self._consume_fields():
+···611              if not _type:
+···612                  _type = self._lookup_annotation(_name)
+···613              if self._config.napoleon_use_ivar:
+···614                  _name = self._qualify_name(_name, self._obj)
+···615                  field = ':ivar %s: ' % _name
+···616                  lines.extend(self._format_block(field, _desc))
+···617                  if _type:
+···618                      lines.append(':vartype %s: %s' % (_name, _type))
+···619              else:
+···620                  lines.append('.. attribute:: ' + _name)
+···621                  if self._opt and 'noindex' in self._opt:
+···622                      lines.append('   :noindex:')
+···623                  lines.append('')
+········
+···624                  fields = self._format_field('', '', _desc)
+···625                  lines.extend(self._indent(fields, 3))
+···626                  if _type:
+···627                      lines.append('')
+···628                      lines.extend(self._indent([':type: %s' % _type], 3))
+···629                  lines.append('')
+···630          if self._config.napoleon_use_ivar:
+···631              lines.append('')
+···632          return lines
+········
+···633      def _parse_examples_section(self, section: str) -> List[str]:
+···634          labels = {
+···635              'example': _('Example'),
+···636              'examples': _('Examples'),
+···637          }
+···638          use_admonition = self._config.napoleon_use_admonition_for_examples
+···639          label = labels.get(section.lower(), section)
+···640          return self._parse_generic_section(label, use_admonition)
+········
+···641      def _parse_custom_generic_section(self, section: str) -> List[str]:
+···642          # for now, no admonition for simple custom sections
+···643          return self._parse_generic_section(section, False)
+········
+···644      def _parse_custom_params_style_section(self, section: str) -> List[str]:
+···645          return self._format_fields(section, self._consume_fields())
+········
+···646      def _parse_custom_returns_style_section(self, section: str) -> List[str]:
+···647          fields = self._consume_returns_section(preprocess_types=True)
+···648          return self._format_fields(section, fields)
+········
+···649      def _parse_usage_section(self, section: str) -> List[str]:
+···650          header = ['.. rubric:: Usage:', '']
+···651          block = ['.. code-block:: python', '']
+···652          lines = self._consume_usage_section()
+···653          lines = self._indent(lines, 3)
+···654          return header + block + lines + ['']
+········
+···655      def _parse_generic_section(self, section: str, use_admonition: bool) -> List[str]:
+···656          lines = self._strip_empty(self._consume_to_next_section())
+···657          lines = self._dedent(lines)
+···658          if use_admonition:
+···659              header = '.. admonition:: %s' % section
+···660              lines = self._indent(lines, 3)
+···661          else:
+···662              header = '.. rubric:: %s' % section
+···663          if lines:
+···664              return [header, ''] + lines + ['']
+···665          else:
+···666              return [header, '']
+········
+···667      def _parse_keyword_arguments_section(self, section: str) -> List[str]:
+···668          fields = self._consume_fields()
+···669          if self._config.napoleon_use_keyword:
+···670              return self._format_docutils_params(
+···671                  fields,
+···672                  field_role="keyword",
+···673                  type_role="kwtype")
+···674          else:
+···675              return self._format_fields(_('Keyword Arguments'), fields)
+········
+···676      def _parse_methods_section(self, section: str) -> List[str]:
+···677          lines: List[str] = []
+···678          for _name, _type, _desc in self._consume_fields(parse_type=False):
+···679              lines.append('.. method:: %s' % _name)
+···680              if self._opt and 'noindex' in self._opt:
+···681                  lines.append('   :noindex:')
+···682              if _desc:
+···683                  lines.extend([''] + self._indent(_desc, 3))
+···684              lines.append('')
+···685          return lines
+········
+···686      def _parse_notes_section(self, section: str) -> List[str]:
+···687          use_admonition = self._config.napoleon_use_admonition_for_notes
+···688          return self._parse_generic_section(_('Notes'), use_admonition)
+········
+···689      def _parse_other_parameters_section(self, section: str) -> List[str]:
+···690          if self._config.napoleon_use_param:
+···691              # Allow to declare multiple parameters at once (ex: x, y: int)
+···692              fields = self._consume_fields(multiple=True)
+···693              return self._format_docutils_params(fields)
+···694          else:
+···695              fields = self._consume_fields()
+···696              return self._format_fields(_('Other Parameters'), fields)
+········
+···697      def _parse_parameters_section(self, section: str) -> List[str]:
+···698          if self._config.napoleon_use_param:
+···699              # Allow to declare multiple parameters at once (ex: x, y: int)
+···700              fields = self._consume_fields(multiple=True)
+···701              return self._format_docutils_params(fields)
+···702          else:
+···703              fields = self._consume_fields()
+···704              return self._format_fields(_('Parameters'), fields)
+········
+···705      def _parse_raises_section(self, section: str) -> List[str]:
+···706          fields = self._consume_fields(parse_type=False, prefer_type=True)
+···707          lines: List[str] = []
+···708          for _name, _type, _desc in fields:
+···709              m = self._name_rgx.match(_type)
+···710              if m and m.group('name'):
+···711                  _type = m.group('name')
+···712              elif _xref_regex.match(_type):
+···713                  pos = _type.find('`')
+···714                  _type = _type[pos + 1:-1]
+···715              _type = ' ' + _type if _type else ''
+···716              _desc = self._strip_empty(_desc)
+···717              _descs = ' ' + '\n    '.join(_desc) if any(_desc) else ''
+···718              lines.append(':raises%s:%s' % (_type, _descs))
+···719          if lines:
+···720              lines.append('')
+···721          return lines
+········
+···722      def _parse_receives_section(self, section: str) -> List[str]:
+···723          if self._config.napoleon_use_param:
+···724              # Allow to declare multiple parameters at once (ex: x, y: int)
+···725              fields = self._consume_fields(multiple=True)
+···726              return self._format_docutils_params(fields)
+···727          else:
+···728              fields = self._consume_fields()
+···729              return self._format_fields(_('Receives'), fields)
+········
+···730      def _parse_references_section(self, section: str) -> List[str]:
+···731          use_admonition = self._config.napoleon_use_admonition_for_references
+···732          return self._parse_generic_section(_('References'), use_admonition)
+········
+···733      def _parse_returns_section(self, section: str) -> List[str]:
+···734          fields = self._consume_returns_section()
+···735          multi = len(fields) > 1
+···736          if multi:
+···737              use_rtype = False
+···738          else:
+···739              use_rtype = self._config.napoleon_use_rtype
+········
+···740          lines: List[str] = []
+···741          for _name, _type, _desc in fields:
+···742              if use_rtype:
+···743                  field = self._format_field(_name, '', _desc)
+···744              else:
+···745                  field = self._format_field(_name, _type, _desc)
+········
+···746              if multi:
+···747                  if lines:
+···748                      lines.extend(self._format_block('          * ', field))
+···749                  else:
+···750                      lines.extend(self._format_block(':returns: * ', field))
+···751              else:
+···752                  lines.extend(self._format_block(':returns: ', field))
+···753                  if _type and use_rtype:
+···754                      lines.extend([':rtype: %s' % _type, ''])
+···755          if lines and lines[-1]:
+···756              lines.append('')
+···757          return lines
+········
+···758      def _parse_see_also_section(self, section: str) -> List[str]:
+···759          return self._parse_admonition('seealso', section)
+········
+···760      def _parse_warns_section(self, section: str) -> List[str]:
+···761          return self._format_fields(_('Warns'), self._consume_fields())
+········
+···762      def _parse_yields_section(self, section: str) -> List[str]:
+···763          fields = self._consume_returns_section(preprocess_types=True)
+···764          return self._format_fields(_('Yields'), fields)
+········
+···765      def _partition_field_on_colon(self, line: str) -> Tuple[str, str, str]:
+···766          before_colon = []
+···767          after_colon = []
+···768          colon = ''
+···769          found_colon = False
+···770          for i, source in enumerate(_xref_or_code_regex.split(line)):
+···771              if found_colon:
+···772                  after_colon.append(source)
+···773              else:
+···774                  m = _single_colon_regex.search(source)
+···775                  if (i % 2) == 0 and m:
+···776                      found_colon = True
+···777                      colon = source[m.start(): m.end()]
+···778                      before_colon.append(source[:m.start()])
+···779                      after_colon.append(source[m.end():])
+···780                  else:
+···781                      before_colon.append(source)
+········
+···782          return ("".join(before_colon).strip(),
+···783                  colon,
+···784                  "".join(after_colon).strip())
+········
+···785      def _qualify_name(self, attr_name: str, klass: Type) -> str:
+···786          if klass and '.' not in attr_name:
+···787              if attr_name.startswith('~'):
+···788                  attr_name = attr_name[1:]
+···789              try:
+···790                  q = klass.__qualname__
+···791              except AttributeError:
+···792                  q = klass.__name__
+···793              return '~%s.%s' % (q, attr_name)
+···794          return attr_name
+········
+···795      def _strip_empty(self, lines: List[str]) -> List[str]:
+···796          if lines:
+···797              start = -1
+···798              for i, line in enumerate(lines):
+···799                  if line:
+···800                      start = i
+···801                      break
+···802              if start == -1:
+···803                  lines = []
+···804              end = -1
+···805              for i in reversed(range(len(lines))):
+···806                  line = lines[i]
+···807                  if line:
+···808                      end = i
+···809                      break
+···810              if start > 0 or end + 1 < len(lines):
+···811                  lines = lines[start:end + 1]
+···812          return lines
+········
+···813      def _lookup_annotation(self, _name: str) -> str:
+···814          if self._config.napoleon_attr_annotations:
+···815              if self._what in ("module", "class", "exception") and self._obj:
+···816                  # cache the class annotations
+···817                  if not hasattr(self, "_annotations"):
+···818                      localns = getattr(self._config, "autodoc_type_aliases", {})
+···819                      localns.update(getattr(
+···820                                     self._config, "napoleon_type_aliases", {}
+···821                                     ) or {})
+···822                      self._annotations = get_type_hints(self._obj, None, localns)
+···823                  if _name in self._annotations:
+···824                      return stringify_annotation(self._annotations[_name])
+···825          # No annotation found
+···826          return ""
+········
+········
+···827  def _recombine_set_tokens(tokens: List[str]) -> List[str]:
+···828      token_queue = collections.deque(tokens)
+···829      keywords = ("optional", "default")
+········
+···830      def takewhile_set(tokens):
+···831          open_braces = 0
+···832          previous_token = None
+···833          while True:
+···834              try:
+···835                  token = tokens.popleft()
+···836              except IndexError:
+···837                  break
+········
+···838              if token == ", ":
+···839                  previous_token = token
+···840                  continue
+········
+···841              if not token.strip():
+···842                  continue
+········
+···843              if token in keywords:
+···844                  tokens.appendleft(token)
+···845                  if previous_token is not None:
+···846                      tokens.appendleft(previous_token)
+···847                  break
+········
+
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+I'll inspect the rest of _recombine_set_tokens and the tokenization logic to see how commas inside parentheses are handled and where "dict(str, str)" might be split incorrectly.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+start_line
+820
+----ARG----
+end_line
+1100
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···820                      before_colon.append(source[:m.start()])
+···821                      after_colon.append(source[m.end():])
+···822                  else:
+···823                      before_colon.append(source)
+········
+···824          return ("".join(before_colon).strip(),
+···825                  colon,
+···826                  "".join(after_colon).strip())
+········
+···827      def _qualify_name(self, attr_name: str, klass: Type) -> str:
+···828          if klass and '.' not in attr_name:
+···829              if attr_name.startswith('~'):
+···830                  attr_name = attr_name[1:]
+···831              try:
+···832                  q = klass.__qualname__
+···833              except AttributeError:
+···834                  q = klass.__name__
+···835              return '~%s.%s' % (q, attr_name)
+···836          return attr_name
+········
+···837      def _strip_empty(self, lines: List[str]) -> List[str]:
+···838          if lines:
+···839              start = -1
+···840              for i, line in enumerate(lines):
+···841                  if line:
+···842                      start = i
+···843                      break
+···844              if start == -1:
+···845                  lines = []
+···846              end = -1
+···847              for i in reversed(range(len(lines))):
+···848                  line = lines[i]
+···849                  if line:
+···850                      end = i
+···851                      break
+···852              if start > 0 or end + 1 < len(lines):
+···853                  lines = lines[start:end + 1]
+···854          return lines
+········
+···855      def _lookup_annotation(self, _name: str) -> str:
+···856          if self._config.napoleon_attr_annotations:
+···857              if self._what in ("module", "class", "exception") and self._obj:
+···858                  # cache the class annotations
+···859                  if not hasattr(self, "_annotations"):
+···860                      localns = getattr(self._config, "autodoc_type_aliases", {})
+···861                      localns.update(getattr(
+···862                                     self._config, "napoleon_type_aliases", {}
+···863                                     ) or {})
+···864                      self._annotations = get_type_hints(self._obj, None, localns)
+···865                  if _name in self._annotations:
+···866                      return stringify_annotation(self._annotations[_name])
+···867          # No annotation found
+···868          return ""
+········
+········
+···869  def _recombine_set_tokens(tokens: List[str]) -> List[str]:
+···870      token_queue = collections.deque(tokens)
+···871      keywords = ("optional", "default")
+········
+···872      def takewhile_set(tokens):
+···873          open_braces = 0
+···874          previous_token = None
+···875          while True:
+···876              try:
+···877                  token = tokens.popleft()
+···878              except IndexError:
+···879                  break
+········
+···880              if token == ", ":
+···881                  previous_token = token
+···882                  continue
+········
+···883              if not token.strip():
+···884                  continue
+········
+···885              if token in keywords:
+···886                  tokens.appendleft(token)
+···887                  if previous_token is not None:
+···888                      tokens.appendleft(previous_token)
+···889                  break
+········
+···890              if previous_token is not None:
+···891                  yield previous_token
+···892                  previous_token = None
+········
+···893              if token == "{":
+···894                  open_braces += 1
+···895              elif token == "}":
+···896                  open_braces -= 1
+········
+···897              yield token
+········
+···898              if open_braces == 0:
+···899                  break
+········
+···900      def combine_set(tokens):
+···901          while True:
+···902              try:
+···903                  token = tokens.popleft()
+···904              except IndexError:
+···905                  break
+········
+···906              if token == "{":
+···907                  tokens.appendleft("{")
+···908                  yield "".join(takewhile_set(tokens))
+···909              else:
+···910                  yield token
+········
+···911      return list(combine_set(token_queue))
+········
+········
+···912  def _tokenize_type_spec(spec: str) -> List[str]:
+···913      def postprocess(item):
+···914          if _default_regex.match(item):
+···915              default = item[:7]
+···916              # can't be separated by anything other than a single space
+···917              # for now
+···918              other = item[8:]
+········
+···919              return [default, " ", other]
+···920          else:
+···921              return [item]
+········
+···922      tokens = list(
+···923          item
+···924          for raw_token in _token_regex.split(spec)
+···925          for item in postprocess(raw_token)
+···926          if item
+···927      )
+···928      return tokens
+········
+········
+···929  def _token_type(token: str, location: str = None) -> str:
+···930      def is_numeric(token):
+···931          try:
+···932              # use complex to make sure every numeric value is detected as literal
+···933              complex(token)
+···934          except ValueError:
+···935              return False
+···936          else:
+···937              return True
+········
+···938      if token.startswith(" ") or token.endswith(" "):
+···939          type_ = "delimiter"
+···940      elif (
+···941              is_numeric(token) or
+···942              (token.startswith("{") and token.endswith("}")) or
+···943              (token.startswith('"') and token.endswith('"')) or
+···944              (token.startswith("'") and token.endswith("'"))
+···945      ):
+···946          type_ = "literal"
+···947      elif token.startswith("{"):
+···948          logger.warning(
+···949              __("invalid value set (missing closing brace): %s"),
+···950              token,
+···951              location=location,
+···952          )
+···953          type_ = "literal"
+···954      elif token.endswith("}"):
+···955          logger.warning(
+···956              __("invalid value set (missing opening brace): %s"),
+···957              token,
+···958              location=location,
+···959          )
+···960          type_ = "literal"
+···961      elif token.startswith("'") or token.startswith('"'):
+···962          logger.warning(
+···963              __("malformed string literal (missing closing quote): %s"),
+···964              token,
+···965              location=location,
+···966          )
+···967          type_ = "literal"
+···968      elif token.endswith("'") or token.endswith('"'):
+···969          logger.warning(
+···970              __("malformed string literal (missing opening quote): %s"),
+···971              token,
+···972              location=location,
+···973          )
+···974          type_ = "literal"
+···975      elif token in ("optional", "default"):
+···976          # default is not a official keyword (yet) but supported by the
+···977          # reference implementation (numpydoc) and widely used
+···978          type_ = "control"
+···979      elif _xref_regex.match(token):
+···980          type_ = "reference"
+···981      else:
+···982          type_ = "obj"
+········
+···983      return type_
+········
+········
+···984  def _convert_numpy_type_spec(_type: str, location: str = None, translations: dict = {}) -> str:
+···985      def convert_obj(obj, translations, default_translation):
+···986          translation = translations.get(obj, obj)
+········
+···987          # use :class: (the default) only if obj is not a standard singleton
+···988          if translation in _SINGLETONS and default_translation == ":class:`%s`":
+···989              default_translation = ":obj:`%s`"
+···990          elif translation == "..." and default_translation == ":class:`%s`":
+···991              # allow referencing the builtin ...
+···992              default_translation = ":obj:`%s <Ellipsis>`"
+········
+···993          if _xref_regex.match(translation) is None:
+···994              translation = default_translation % translation
+········
+···995          return translation
+········
+···996      tokens = _tokenize_type_spec(_type)
+···997      combined_tokens = _recombine_set_tokens(tokens)
+···998      types = [
+···999          (token, _token_type(token, location))
+··1000          for token in combined_tokens
+··1001      ]
+········
+··1002      converters = {
+··1003          "literal": lambda x: "``%s``" % x,
+··1004          "obj": lambda x: convert_obj(x, translations, ":class:`%s`"),
+··1005          "control": lambda x: "*%s*" % x,
+··1006          "delimiter": lambda x: x,
+··1007          "reference": lambda x: x,
+··1008      }
+········
+··1009      converted = "".join(converters.get(type_)(token) for token, type_ in types)
+········
+··1010      return converted
+········
+········
+··1011  class NumpyDocstring(GoogleDocstring):
+··1012      """Convert NumPy style docstrings to reStructuredText.
+········
+··1013      Parameters
+··1014      ----------
+··1015      docstring : :obj:`str` or :obj:`list` of :obj:`str`
+··1016          The docstring to parse, given either as a string or split into
+··1017          individual lines.
+··1018      config: :obj:`sphinx.ext.napoleon.Config` or :obj:`sphinx.config.Config`
+··1019          The configuration settings to use. If not given, defaults to the
+··1020          config object on `app`; or if `app` is not given defaults to the
+··1021          a new :class:`sphinx.ext.napoleon.Config` object.
+········
+········
+··1022      Other Parameters
+··1023      ----------------
+··1024      app : :class:`sphinx.application.Sphinx`, optional
+··1025          Application object representing the Sphinx process.
+··1026      what : :obj:`str`, optional
+··1027          A string specifying the type of the object to which the docstring
+··1028          belongs. Valid values: "module", "class", "exception", "function",
+··1029          "method", "attribute".
+··1030      name : :obj:`str`, optional
+··1031          The fully qualified name of the object.
+··1032      obj : module, class, exception, function, method, or attribute
+··1033          The object to which the docstring belongs.
+··1034      options : :class:`sphinx.ext.autodoc.Options`, optional
+··1035          The options given to the directive: an object with attributes
+··1036          inherited_members, undoc_members, show_inheritance and noindex that
+··1037          are True if the flag option of same name was given to the auto
+··1038          directive.
+········
+········
+··1039      Example
+··1040      -------
+··1041      >>> from sphinx.ext.napoleon import Config
+··1042      >>> config = Config(napoleon_use_param=True, napoleon_use_rtype=True)
+··1043      >>> docstring = '''One line summary.
+··1044      ...
+··1045      ... Extended description.
+··1046      ...
+··1047      ... Parameters
+··1048      ... ----------
+··1049      ... arg1 : int
+··1050      ...     Description of `arg1`
+··1051      ... arg2 : str
+··1052      ...     Description of `arg2`
+··1053      ... Returns
+··1054      ... -------
+··1055      ... str
+··1056      ...     Description of return value.
+··1057      ... '''
+··1058      >>> print(NumpyDocstring(docstring, config))
+··1059      One line summary.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I will detect the file's indentation style before making the small regex edit to _token_regex so I preserve the project's indentation rules.
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=23)|
+I will open the _recombine_set_tokens function region to prepare a minimal edit that treats parentheses like braces (so commas inside parentheses aren't split). 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+start_line
+868
+----ARG----
+end_line
+920
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=24)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···868                      self._annotations = get_type_hints(self._obj, None, localns)
+···869                  if _name in self._annotations:
+···870                      return stringify_annotation(self._annotations[_name])
+···871          # No annotation found
+···872          return ""
+········
+········
+···873  def _recombine_set_tokens(tokens: List[str]) -> List[str]:
+···874      token_queue = collections.deque(tokens)
+···875      keywords = ("optional", "default")
+········
+···876      def takewhile_set(tokens):
+···877          open_braces = 0
+···878          previous_token = None
+···879          while True:
+···880              try:
+···881                  token = tokens.popleft()
+···882              except IndexError:
+···883                  break
+········
+···884              if token == ", ":
+···885                  previous_token = token
+···886                  continue
+········
+···887              if not token.strip():
+···888                  continue
+········
+···889              if token in keywords:
+···890                  tokens.appendleft(token)
+···891                  if previous_token is not None:
+···892                      tokens.appendleft(previous_token)
+···893                  break
+········
+···894              if previous_token is not None:
+···895                  yield previous_token
+···896                  previous_token = None
+········
+···897              if token == "{":
+···898                  open_braces += 1
+···899              elif token == "}":
+···900                  open_braces -= 1
+········
+···901              yield token
+········
+···902              if open_braces == 0:
+···903                  break
+········
+···904      def combine_set(tokens):
+···905          while True:
+···906              try:
+···907                  token = tokens.popleft()
+···908              except IndexError:
+···909                  break
+
+
+----------------------------
+|MESSAGE(role="assistant", id=25)|
+The tokenizer didn't split parentheses, so commas inside "(...)" were treated as separators; I'll add "(" and ")" to _token_regex so parentheses become tokens and _recombine_set_tokens can handle them.  
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+old_text
+_token_regex = re.compile(
+    r"(,\sor\s|\sor\s|\sof\s|:\s|\sto\s|,\sand\s|\sand\s|,\s"
+    r"|[{]|[}]"
+    r'|"(?:\\"|[^"])*"'
+    r"|'(?:\\'|[^'])*')"
+)
+----ARG----
+new_text
+_token_regex = re.compile(
+    r"(,\sor\s|\sor\s|\sof\s|:\s|\sto\s|,\sand\s|\sand\s|,\s"
+    r"|[{]|[}]|[(]|[)]"
+    r'|"(?:\\"|[^"])*"'
+    r"|'(?:\\'|[^'])*')"
+)
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=26)|
+✓ Successfully replaced 1 occurrence(s) in sphinx/ext/napoleon/docstring.py.
+Found 1 total occurrence(s) of the text.
+TIP: Call show_file to verify the change was correct.
+
+----------------------------
+|MESSAGE(role="assistant", id=27)|
+I'll verify the change by showing the edited region around the token regex to confirm parentheses were added and indentation is correct.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sphinx/ext/napoleon/docstring.py
+----ARG----
+start_line
+32
+----ARG----
+end_line
+46
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=28)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+····32  _numpy_section_regex = re.compile(r'^[=\-`:\'"~^_*+#<>]{2,}\s*$')
+····33  _single_colon_regex = re.compile(r'(?<!:):(?!:)')
+····34  _xref_or_code_regex = re.compile(
+····35      r'((?::(?:[a-zA-Z0-9]+[\-_+:.])*[a-zA-Z0-9]+:`.+?`)|'
+····36      r'(?:``.+?``))')
+····37  _xref_regex = re.compile(
+····38      r'(?:(?::(?:[a-zA-Z0-9]+[\-_+:.])*[a-zA-Z0-9]+:)?`.+?`)'
+····39  )
+····40  _bullet_list_regex = re.compile(r'^(\*|\+|\-)(\s+\S|\s*$)')
+····41  _enumerated_list_regex = re.compile(
+····42      r'^(?P<paren>\()?'
+····43      r'(\d+|#|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])'
+····44      r'(?(paren)\)|\.)(\s+\S|\s*$)')
+····45  _token_regex = re.compile(
+····46      r"(,\sor\s|\sor\s|\sof\s|:\s|\sto\s|,\sand\s|\sand\s|,\s"
+
+
+----------------------------
+|MESSAGE(role="assistant", id=29)|
+I added parentheses to the tokenizer so commas inside parentheses (e.g., dict(str, str)) are not split; I'll now run the repository verification checks to ensure syntax and tests pass.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=30)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 1
+   Lines deleted: 1
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/sphinx/ext/napoleon/docstring.py b/sphinx/ext/napoleon/docstring.py
+index d8cb75a5f..dc04ba238 100644
+--- a/sphinx/ext/napoleon/docstring.py
++++ b/sphinx/ext/napoleon/docstring.py
+@@ -44,7 +44,7 @@ _enumerated_list_regex = re.compile(
+     r'(?(paren)\)|\.)(\s+\S|\s*$)')
+ _token_regex = re.compile(
+     r"(,\sor\s|\sor\s|\sof\s|:\s|\sto\s|,\sand\s|\sand\s|,\s"
+-    r"|[{]|[}]"
++    r"|[{]|[}]|[(]|[)]"
+     r'|"(?:\\"|[^"])*"'
+     r"|'(?:\\'|[^'])*')"
+ )
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+

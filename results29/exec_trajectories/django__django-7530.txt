@@ -1,0 +1,1397 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Shows git diff preview of all changes
+5. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+makemigrations router.allow_migrate() calls for consistency checks use incorrect (app_label, model) pairs
+Description
+	
+As reported in ticket:27200#comment:14, I makemigrations incorrectly calls allow_migrate() for each app with all the models in the project rather than for each app with the app's models. It broke the router I use because it was passing invalid combinations for shards since not all shards have the same models.
+[​​https://github.com/django/django/pull/7530 PR]
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll inspect the repository root to find where makemigrations and router.allow_migrate are implemented so I can locate the incorrect (app_label, model) pairs usage. 
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+total 172
+drwxrwxrwx   1 root root  4096 Sep 10 13:46 .
+drwxr-xr-x   1 root root  4096 Oct  4 19:45 ..
+-rw-r--r--   1 root root   744 Sep 10 13:39 .editorconfig
+-rw-r--r--   1 root root    86 Sep 10 13:39 .eslintignore
+-rw-r--r--   1 root root  1165 Sep 10 13:39 .eslintrc
+drwxrwxrwx   8 root root  4096 Sep 10 13:46 .git
+-rw-r--r--   1 root root   297 Sep 10 13:39 .gitattributes
+-rw-r--r--   1 root root   353 Sep 10 13:39 .gitignore
+-rw-r--r--   1 root root   164 Sep 10 13:39 .hgignore
+drwxrwxrwx   2 root root  4096 Sep 10 13:39 .tx
+-rw-r--r--   1 root root 30987 Sep 10 13:39 AUTHORS
+-rw-r--r--   1 root root  1115 Sep 10 13:39 CONTRIBUTING.rst
+drwxr-xr-x   2 root root  4096 Sep 10 13:46 Django.egg-info
+-rw-r--r--   1 root root   637 Sep 10 13:39 Gruntfile.js
+-rw-r--r--   1 root root   611 Sep 10 13:39 INSTALL
+-rw-r--r--   1 root root  1552 Sep 10 13:39 LICENSE
+-rw-r--r--   1 root root 12767 Sep 10 13:39 LICENSE.python
+-rw-r--r--   1 root root   307 Sep 10 13:39 MANIFEST.in
+-rw-r--r--   1 root root  1847 Sep 10 13:39 README.rst
+drwxr-xr-x   5 root root  4096 Sep 10 13:46 build
+drwxr-xr-x   2 root root  4096 Sep 10 13:46 dist
+drwxrwxrwx  19 root root  4096 Sep 10 13:46 django
+drwxrwxrwx  13 root root  4096 Sep 10 13:39 docs
+drwxrwxrwx   2 root root  4096 Sep 10 13:39 extras
+drwxrwxrwx   5 root root  4096 Sep 10 13:39 js_tests
+-rw-r--r--   1 root root   348 Sep 10 13:39 package.json
+drwxrwxrwx   2 root root  4096 Sep 10 13:39 scripts
+-rw-r--r--   1 root root   655 Sep 10 13:39 setup.cfg
+-rw-r--r--   1 root root  3334 Sep 10 13:39 setup.py
+drwxrwxrwx 205 root root 12288 Sep 10 13:39 tests
+-rw-r--r--   1 root root  1566 Sep 10 13:39 tox.ini
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll search the codebase for usages of allow_migrate and makemigrations to locate where makemigrations calls router.allow_migrate with model/app pairs. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+allow_migrate(
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+./build/lib/django/core/management/commands/makemigrations.py:106:                    router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
+./build/lib/django/db/models/fields/__init__.py:311:            if router.allow_migrate(db, app_label, model_name=self.model._meta.model_name):
+./build/lib/django/db/utils.py:292:    def allow_migrate(self, db, app_label, **hints):
+./build/lib/django/db/utils.py:307:        return self.allow_migrate(
+./build/lib/django/db/migrations/executor.py:306:                router.allow_migrate(
+./build/lib/django/db/migrations/operations/special.py:106:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./build/lib/django/db/migrations/operations/special.py:112:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./build/lib/django/db/migrations/operations/special.py:184:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./build/lib/django/db/migrations/operations/special.py:194:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./tests/invalid_models_tests/test_backend_specific.py:10:def dummy_allow_migrate(db, app_label, **hints):
+./tests/sites_tests/tests.py:219:    def allow_migrate(self, db, app_label, **hints):
+./tests/cache/tests.py:1038:    def allow_migrate(self, db, app_label, **hints):
+./tests/check_framework/test_multi_db.py:10:    def allow_migrate(self, db, app_label, model_name=None, **hints):
+./tests/multiple_database/routers.py:23:    def allow_migrate(self, db, app_label, **hints):
+./tests/multiple_database/routers.py:52:    def allow_migrate(self, db, app_label, **hints):
+./tests/multiple_database/tests.py:1538:    def allow_migrate(self, db, app_label, model_name=None, **hints):
+./tests/multiple_database/tests.py:1792:    def allow_migrate(self, db, app_label, **hints):
+./tests/migrations/routers.py:6:    def allow_migrate(self, db, app_label, model_name=None, **hints):
+./tests/migrations/test_multidb.py:19:    def allow_migrate(self, db, app_label, **hints):
+./tests/migrations/test_multidb.py:27:    def allow_migrate(self, db, app_label, **hints):
+./tests/migrations/test_multidb.py:35:    def allow_migrate(self, db, app_label, **hints):
+./tests/migrations/test_multidb.py:43:    def allow_migrate(self, db, app_label, **hints):
+./tests/gis_tests/layermap/tests.py:334:    def allow_migrate(self, db, app_label, **hints):
+./django/core/management/commands/makemigrations.py:106:                    router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
+./django/db/models/fields/__init__.py:311:            if router.allow_migrate(db, app_label, model_name=self.model._meta.model_name):
+./django/db/utils.py:292:    def allow_migrate(self, db, app_label, **hints):
+./django/db/utils.py:307:        return self.allow_migrate(
+./django/db/migrations/executor.py:306:                router.allow_migrate(
+./django/db/migrations/operations/special.py:106:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./django/db/migrations/operations/special.py:112:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./django/db/migrations/operations/special.py:184:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./django/db/migrations/operations/special.py:194:        if router.allow_migrate(schema_editor.connection.alias, app_label, **self.hints):
+./docs/internals/deprecation.txt:390:  from ``allow_migrate(self, db, model)`` to
+./docs/internals/deprecation.txt:391:  ``allow_migrate(self, db, app_label, model_name=None, **hints)``.
+./docs/howto/writing-migrations.txt:39:You can also provide hints that will be passed to the :meth:`allow_migrate()`
+./docs/howto/writing-migrations.txt:47:        def allow_migrate(self, db, app_label, model_name=None, **hints):
+./docs/topics/db/multi-db.txt:171:.. method:: allow_migrate(db, app_label, model_name=None, **hints)
+./docs/topics/db/multi-db.txt:199:    if ``allow_migrate()`` returns ``False``, any migration operations for the
+./docs/topics/db/multi-db.txt:201:    the ``db``. Changing the behavior of ``allow_migrate()`` for models that
+./docs/topics/db/multi-db.txt:333:        def allow_migrate(self, db, app_label, model_name=None, **hints):
+./docs/topics/db/multi-db.txt:371:        def allow_migrate(self, db, app_label, model_name=None, **hints):
+./docs/topics/db/multi-db.txt:390:``PrimaryReplicaRouter.allow_migrate()`` would be processed first. The
+./docs/topics/cache.txt:218:``allow_migrate()`` method of your database routers (see below).
+./docs/topics/cache.txt:256:        def allow_migrate(self, db, app_label, model_name=None, **hints):
+./docs/releases/1.8.7.txt:32:  ``allow_migrate()`` method to crash (:ticket:`25686`).
+./docs/releases/1.8.txt:1704:changed from ``allow_migrate(db, model)`` to
+./docs/releases/1.8.txt:1705:``allow_migrate(db, app_label, model_name=None, **hints)``.
+./docs/releases/1.7.txt:1445:* The ``sql*`` management commands now respect the ``allow_migrate()`` method
+./docs/releases/1.10.3.txt:54:* Added ``model_name`` to the ``allow_migrate()`` calls in ``makemigrations``
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll open the makemigrations management command to inspect the allow_migrate call and surrounding code to determine why incorrect (app_label, model) pairs are being passed. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/management/commands/makemigrations.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+240
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+     1  import io
+     2  import os
+     3  import sys
+     4  import warnings
+     5  from itertools import takewhile
+        
+     6  from django.apps import apps
+     7  from django.conf import settings
+     8  from django.core.management.base import BaseCommand, CommandError
+     9  from django.db import DEFAULT_DB_ALIAS, connections, router
+    10  from django.db.migrations import Migration
+    11  from django.db.migrations.autodetector import MigrationAutodetector
+    12  from django.db.migrations.loader import MigrationLoader
+    13  from django.db.migrations.questioner import (
+    14      InteractiveMigrationQuestioner, MigrationQuestioner,
+    15      NonInteractiveMigrationQuestioner,
+    16  )
+    17  from django.db.migrations.state import ProjectState
+    18  from django.db.migrations.utils import get_migration_name_timestamp
+    19  from django.db.migrations.writer import MigrationWriter
+    20  from django.utils.deprecation import RemovedInDjango20Warning
+    21  from django.utils.six import iteritems
+    22  from django.utils.six.moves import zip
+        
+        
+    23  class Command(BaseCommand):
+    24      help = "Creates new migration(s) for apps."
+        
+    25      def add_arguments(self, parser):
+    26          parser.add_argument(
+    27              'args', metavar='app_label', nargs='*',
+    28              help='Specify the app label(s) to create migrations for.',
+    29          )
+    30          parser.add_argument(
+    31              '--dry-run', action='store_true', dest='dry_run', default=False,
+    32              help="Just show what migrations would be made; don't actually write them.",
+    33          )
+    34          parser.add_argument(
+    35              '--merge', action='store_true', dest='merge', default=False,
+    36              help="Enable fixing of migration conflicts.",
+    37          )
+    38          parser.add_argument(
+    39              '--empty', action='store_true', dest='empty', default=False,
+    40              help="Create an empty migration.",
+    41          )
+    42          parser.add_argument(
+    43              '--noinput', '--no-input',
+    44              action='store_false', dest='interactive', default=True,
+    45              help='Tells Django to NOT prompt the user for input of any kind.',
+    46          )
+    47          parser.add_argument(
+    48              '-n', '--name', action='store', dest='name', default=None,
+    49              help="Use this name for migration file(s).",
+    50          )
+    51          parser.add_argument(
+    52              '-e', '--exit', action='store_true', dest='exit_code', default=False,
+    53              help='Exit with error code 1 if no changes needing migrations are found. '
+    54                   'Deprecated, use the --check option instead.',
+    55          )
+    56          parser.add_argument(
+    57              '--check', action='store_true', dest='check_changes',
+    58              help='Exit with a non-zero status if model changes are missing migrations.',
+    59          )
+        
+    60      def handle(self, *app_labels, **options):
+    61          self.verbosity = options['verbosity']
+    62          self.interactive = options['interactive']
+    63          self.dry_run = options['dry_run']
+    64          self.merge = options['merge']
+    65          self.empty = options['empty']
+    66          self.migration_name = options['name']
+    67          self.exit_code = options['exit_code']
+    68          check_changes = options['check_changes']
+        
+    69          if self.exit_code:
+    70              warnings.warn(
+    71                  "The --exit option is deprecated in favor of the --check option.",
+    72                  RemovedInDjango20Warning
+    73              )
+        
+    74          # Make sure the app they asked for exists
+    75          app_labels = set(app_labels)
+    76          bad_app_labels = set()
+    77          for app_label in app_labels:
+    78              try:
+    79                  apps.get_app_config(app_label)
+    80              except LookupError:
+    81                  bad_app_labels.add(app_label)
+    82          if bad_app_labels:
+    83              for app_label in bad_app_labels:
+    84                  self.stderr.write("App '%s' could not be found. Is it in INSTALLED_APPS?" % app_label)
+    85              sys.exit(2)
+        
+    86          # Load the current graph state. Pass in None for the connection so
+    87          # the loader doesn't try to resolve replaced migrations from DB.
+    88          loader = MigrationLoader(None, ignore_no_migrations=True)
+        
+    89          # Raise an error if any migrations are applied before their dependencies.
+    90          consistency_check_labels = set(config.label for config in apps.get_app_configs())
+    91          # Non-default databases are only checked if database routers used.
+    92          aliases_to_check = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
+    93          for alias in sorted(aliases_to_check):
+    94              connection = connections[alias]
+    95              if (connection.settings_dict['ENGINE'] != 'django.db.backends.dummy' and any(
+    96                      # At least one model must be migrated to the database.
+    97                      router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
+    98                      for app_label in consistency_check_labels
+    99                      for model in apps.get_models(app_label)
+   100              )):
+   101                  loader.check_consistent_history(connection)
+        
+   102          # Before anything else, see if there's conflicting apps and drop out
+   103          # hard if there are any and they don't want to merge
+   104          conflicts = loader.detect_conflicts()
+        
+   105          # If app_labels is specified, filter out conflicting migrations for unspecified apps
+   106          if app_labels:
+   107              conflicts = {
+   108                  app_label: conflict for app_label, conflict in iteritems(conflicts)
+   109                  if app_label in app_labels
+   110              }
+        
+   111          if conflicts and not self.merge:
+   112              name_str = "; ".join(
+   113                  "%s in %s" % (", ".join(names), app)
+   114                  for app, names in conflicts.items()
+   115              )
+   116              raise CommandError(
+   117                  "Conflicting migrations detected; multiple leaf nodes in the "
+   118                  "migration graph: (%s).\nTo fix them run "
+   119                  "'python manage.py makemigrations --merge'" % name_str
+   120              )
+        
+   121          # If they want to merge and there's nothing to merge, then politely exit
+   122          if self.merge and not conflicts:
+   123              self.stdout.write("No conflicts detected to merge.")
+   124              return
+        
+   125          # If they want to merge and there is something to merge, then
+   126          # divert into the merge code
+   127          if self.merge and conflicts:
+   128              return self.handle_merge(loader, conflicts)
+        
+   129          if self.interactive:
+   130              questioner = InteractiveMigrationQuestioner(specified_apps=app_labels, dry_run=self.dry_run)
+   131          else:
+   132              questioner = NonInteractiveMigrationQuestioner(specified_apps=app_labels, dry_run=self.dry_run)
+   133          # Set up autodetector
+   134          autodetector = MigrationAutodetector(
+   135              loader.project_state(),
+   136              ProjectState.from_apps(apps),
+   137              questioner,
+   138          )
+        
+   139          # If they want to make an empty migration, make one for each app
+   140          if self.empty:
+   141              if not app_labels:
+   142                  raise CommandError("You must supply at least one app label when using --empty.")
+   143              # Make a fake changes() result we can pass to arrange_for_graph
+   144              changes = {
+   145                  app: [Migration("custom", app)]
+   146                  for app in app_labels
+   147              }
+   148              changes = autodetector.arrange_for_graph(
+   149                  changes=changes,
+   150                  graph=loader.graph,
+   151                  migration_name=self.migration_name,
+   152              )
+   153              self.write_migration_files(changes)
+   154              return
+        
+   155          # Detect changes
+   156          changes = autodetector.changes(
+   157              graph=loader.graph,
+   158              trim_to_apps=app_labels or None,
+   159              convert_apps=app_labels or None,
+   160              migration_name=self.migration_name,
+   161          )
+        
+   162          if not changes:
+   163              # No changes? Tell them.
+   164              if self.verbosity >= 1:
+   165                  if len(app_labels) == 1:
+   166                      self.stdout.write("No changes detected in app '%s'" % app_labels.pop())
+   167                  elif len(app_labels) > 1:
+   168                      self.stdout.write("No changes detected in apps '%s'" % ("', '".join(app_labels)))
+   169                  else:
+   170                      self.stdout.write("No changes detected")
+        
+   171              if self.exit_code:
+   172                  sys.exit(1)
+   173          else:
+   174              self.write_migration_files(changes)
+   175              if check_changes:
+   176                  sys.exit(1)
+        
+   177      def write_migration_files(self, changes):
+   178          """
+   179          Takes a changes dict and writes them out as migration files.
+   180          """
+   181          directory_created = {}
+   182          for app_label, app_migrations in changes.items():
+   183              if self.verbosity >= 1:
+   184                  self.stdout.write(self.style.MIGRATE_HEADING("Migrations for '%s':" % app_label) + "\n")
+   185              for migration in app_migrations:
+   186                  # Describe the migration
+   187                  writer = MigrationWriter(migration)
+   188                  if self.verbosity >= 1:
+   189                      # Display a relative path if it's below the current working
+   190                      # directory, or an absolute path otherwise.
+   191                      try:
+   192                          migration_string = os.path.relpath(writer.path)
+   193                      except ValueError:
+   194                          migration_string = writer.path
+   195                      if migration_string.startswith('..'):
+   196                          migration_string = writer.path
+   197                      self.stdout.write("  %s:\n" % (self.style.MIGRATE_LABEL(migration_string),))
+   198                      for operation in migration.operations:
+   199                          self.stdout.write("    - %s\n" % operation.describe())
+   200                  if not self.dry_run:
+   201                      # Write the migrations file to the disk.
+   202                      migrations_directory = os.path.dirname(writer.path)
+   203                      if not directory_created.get(app_label):
+   204                          if not os.path.isdir(migrations_directory):
+   205                              os.mkdir(migrations_directory)
+   206                          init_path = os.path.join(migrations_directory, "__init__.py")
+   207                          if not os.path.isfile(init_path):
+   208                              open(init_path, "w").close()
+   209                          # We just do this once per app
+   210                          directory_created[app_label] = True
+   211                      migration_string = writer.as_string()
+   212                      with io.open(writer.path, "w", encoding='utf-8') as fh:
+   213                          fh.write(migration_string)
+   214                  elif self.verbosity == 3:
+   215                      # Alternatively, makemigrations --dry-run --verbosity 3
+   216                      # will output the migrations to stdout rather than saving
+   217                      # the file to the disk.
+   218                      self.stdout.write(self.style.MIGRATE_HEADING(
+   219                          "Full migrations file '%s':" % writer.filename) + "\n"
+   220                      )
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I will locate the apps registry implementation to inspect the signature of get_models and confirm whether passing app_label was incorrect. 
+----BEGIN_FUNCTION_CALL----
+find_file
+----ARG----
+filename
+registry.py
+----ARG----
+directory
+django
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+django/core/checks/registry.py
+django/apps/registry.py
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll open django/apps/registry.py to inspect the get_models implementation and confirm how apps.get_models(app_label) behaves so we can determine the correct arguments to router.allow_migrate.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/apps/registry.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+300
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+     1  import sys
+     2  import threading
+     3  import warnings
+     4  from collections import Counter, OrderedDict, defaultdict
+     5  from functools import partial
+        
+     6  from django.core.exceptions import AppRegistryNotReady, ImproperlyConfigured
+     7  from django.utils import lru_cache
+        
+     8  from .config import AppConfig
+        
+        
+     9  class Apps(object):
+    10      """
+    11      A registry that stores the configuration of installed applications.
+        
+    12      It also keeps track of models eg. to provide reverse-relations.
+    13      """
+        
+    14      def __init__(self, installed_apps=()):
+    15          # installed_apps is set to None when creating the master registry
+    16          # because it cannot be populated at that point. Other registries must
+    17          # provide a list of installed apps and are populated immediately.
+    18          if installed_apps is None and hasattr(sys.modules[__name__], 'apps'):
+    19              raise RuntimeError("You must supply an installed_apps argument.")
+        
+    20          # Mapping of app labels => model names => model classes. Every time a
+    21          # model is imported, ModelBase.__new__ calls apps.register_model which
+    22          # creates an entry in all_models. All imported models are registered,
+    23          # regardless of whether they're defined in an installed application
+    24          # and whether the registry has been populated. Since it isn't possible
+    25          # to reimport a module safely (it could reexecute initialization code)
+    26          # all_models is never overridden or reset.
+    27          self.all_models = defaultdict(OrderedDict)
+        
+    28          # Mapping of labels to AppConfig instances for installed apps.
+    29          self.app_configs = OrderedDict()
+        
+    30          # Stack of app_configs. Used to store the current state in
+    31          # set_available_apps and set_installed_apps.
+    32          self.stored_app_configs = []
+        
+    33          # Whether the registry is populated.
+    34          self.apps_ready = self.models_ready = self.ready = False
+        
+    35          # Lock for thread-safe population.
+    36          self._lock = threading.Lock()
+        
+    37          # Maps ("app_label", "modelname") tuples to lists of functions to be
+    38          # called when the corresponding model is ready. Used by this class's
+    39          # `lazy_model_operation()` and `do_pending_operations()` methods.
+    40          self._pending_operations = defaultdict(list)
+        
+    41          # Populate apps and models, unless it's the master registry.
+    42          if installed_apps is not None:
+    43              self.populate(installed_apps)
+        
+    44      def populate(self, installed_apps=None):
+    45          """
+    46          Loads application configurations and models.
+        
+    47          This method imports each application module and then each model module.
+        
+    48          It is thread safe and idempotent, but not reentrant.
+    49          """
+    50          if self.ready:
+    51              return
+        
+    52          # populate() might be called by two threads in parallel on servers
+    53          # that create threads before initializing the WSGI callable.
+    54          with self._lock:
+    55              if self.ready:
+    56                  return
+        
+    57              # app_config should be pristine, otherwise the code below won't
+    58              # guarantee that the order matches the order in INSTALLED_APPS.
+    59              if self.app_configs:
+    60                  raise RuntimeError("populate() isn't reentrant")
+        
+    61              # Phase 1: initialize app configs and import app modules.
+    62              for entry in installed_apps:
+    63                  if isinstance(entry, AppConfig):
+    64                      app_config = entry
+    65                  else:
+    66                      app_config = AppConfig.create(entry)
+    67                  if app_config.label in self.app_configs:
+    68                      raise ImproperlyConfigured(
+    69                          "Application labels aren't unique, "
+    70                          "duplicates: %s" % app_config.label)
+        
+    71                  self.app_configs[app_config.label] = app_config
+    72                  app_config.apps = self
+        
+    73              # Check for duplicate app names.
+    74              counts = Counter(
+    75                  app_config.name for app_config in self.app_configs.values())
+    76              duplicates = [
+    77                  name for name, count in counts.most_common() if count > 1]
+    78              if duplicates:
+    79                  raise ImproperlyConfigured(
+    80                      "Application names aren't unique, "
+    81                      "duplicates: %s" % ", ".join(duplicates))
+        
+    82              self.apps_ready = True
+        
+    83              # Phase 2: import models modules.
+    84              for app_config in self.app_configs.values():
+    85                  app_config.import_models()
+        
+    86              self.clear_cache()
+        
+    87              self.models_ready = True
+        
+    88              # Phase 3: run ready() methods of app configs.
+    89              for app_config in self.get_app_configs():
+    90                  app_config.ready()
+        
+    91              self.ready = True
+        
+    92      def check_apps_ready(self):
+    93          """
+    94          Raises an exception if all apps haven't been imported yet.
+    95          """
+    96          if not self.apps_ready:
+    97              raise AppRegistryNotReady("Apps aren't loaded yet.")
+        
+    98      def check_models_ready(self):
+    99          """
+   100          Raises an exception if all models haven't been imported yet.
+   101          """
+   102          if not self.models_ready:
+   103              raise AppRegistryNotReady("Models aren't loaded yet.")
+        
+   104      def get_app_configs(self):
+   105          """
+   106          Imports applications and returns an iterable of app configs.
+   107          """
+   108          self.check_apps_ready()
+   109          return self.app_configs.values()
+        
+   110      def get_app_config(self, app_label):
+   111          """
+   112          Imports applications and returns an app config for the given label.
+        
+   113          Raises LookupError if no application exists with this label.
+   114          """
+   115          self.check_apps_ready()
+   116          try:
+   117              return self.app_configs[app_label]
+   118          except KeyError:
+   119              message = "No installed app with label '%s'." % app_label
+   120              for app_config in self.get_app_configs():
+   121                  if app_config.name == app_label:
+   122                      message += " Did you mean '%s'?" % app_config.label
+   123                      break
+   124              raise LookupError(message)
+        
+   125      # This method is performance-critical at least for Django's test suite.
+   126      @lru_cache.lru_cache(maxsize=None)
+   127      def get_models(self, include_auto_created=False, include_swapped=False):
+   128          """
+   129          Returns a list of all installed models.
+        
+   130          By default, the following models aren't included:
+        
+   131          - auto-created models for many-to-many relations without
+   132            an explicit intermediate table,
+   133          - models created to satisfy deferred attribute queries,
+   134          - models that have been swapped out.
+        
+   135          Set the corresponding keyword argument to True to include such models.
+   136          """
+   137          self.check_models_ready()
+        
+   138          result = []
+   139          for app_config in self.app_configs.values():
+   140              result.extend(list(app_config.get_models(include_auto_created, include_swapped)))
+   141          return result
+        
+   142      def get_model(self, app_label, model_name=None, require_ready=True):
+   143          """
+   144          Returns the model matching the given app_label and model_name.
+        
+   145          As a shortcut, this function also accepts a single argument in the
+   146          form <app_label>.<model_name>.
+        
+   147          model_name is case-insensitive.
+        
+   148          Raises LookupError if no application exists with this label, or no
+   149          model exists with this name in the application. Raises ValueError if
+   150          called with a single argument that doesn't contain exactly one dot.
+   151          """
+   152          if require_ready:
+   153              self.check_models_ready()
+   154          else:
+   155              self.check_apps_ready()
+        
+   156          if model_name is None:
+   157              app_label, model_name = app_label.split('.')
+        
+   158          app_config = self.get_app_config(app_label)
+        
+   159          if not require_ready and app_config.models is None:
+   160              app_config.import_models()
+        
+   161          return app_config.get_model(model_name, require_ready=require_ready)
+        
+   162      def register_model(self, app_label, model):
+   163          # Since this method is called when models are imported, it cannot
+   164          # perform imports because of the risk of import loops. It mustn't
+   165          # call get_app_config().
+   166          model_name = model._meta.model_name
+   167          app_models = self.all_models[app_label]
+   168          if model_name in app_models:
+   169              if (model.__name__ == app_models[model_name].__name__ and
+   170                      model.__module__ == app_models[model_name].__module__):
+   171                  warnings.warn(
+   172                      "Model '%s.%s' was already registered. "
+   173                      "Reloading models is not advised as it can lead to inconsistencies, "
+   174                      "most notably with related models." % (app_label, model_name),
+   175                      RuntimeWarning, stacklevel=2)
+   176              else:
+   177                  raise RuntimeError(
+   178                      "Conflicting '%s' models in application '%s': %s and %s." %
+   179                      (model_name, app_label, app_models[model_name], model))
+   180          app_models[model_name] = model
+   181          self.do_pending_operations(model)
+   182          self.clear_cache()
+        
+   183      def is_installed(self, app_name):
+   184          """
+   185          Checks whether an application with this name exists in the registry.
+        
+   186          app_name is the full name of the app eg. 'django.contrib.admin'.
+   187          """
+   188          self.check_apps_ready()
+   189          return any(ac.name == app_name for ac in self.app_configs.values())
+        
+   190      def get_containing_app_config(self, object_name):
+   191          """
+   192          Look for an app config containing a given object.
+        
+   193          object_name is the dotted Python path to the object.
+        
+   194          Returns the app config for the inner application in case of nesting.
+   195          Returns None if the object isn't in any registered app config.
+   196          """
+   197          self.check_apps_ready()
+   198          candidates = []
+   199          for app_config in self.app_configs.values():
+   200              if object_name.startswith(app_config.name):
+   201                  subpath = object_name[len(app_config.name):]
+   202                  if subpath == '' or subpath[0] == '.':
+   203                      candidates.append(app_config)
+   204          if candidates:
+   205              return sorted(candidates, key=lambda ac: -len(ac.name))[0]
+        
+   206      def get_registered_model(self, app_label, model_name):
+   207          """
+   208          Similar to get_model(), but doesn't require that an app exists with
+   209          the given app_label.
+        
+   210          It's safe to call this method at import time, even while the registry
+   211          is being populated.
+   212          """
+   213          model = self.all_models[app_label].get(model_name.lower())
+   214          if model is None:
+   215              raise LookupError(
+   216                  "Model '%s.%s' not registered." % (app_label, model_name))
+   217          return model
+        
+   218      @lru_cache.lru_cache(maxsize=None)
+   219      def get_swappable_settings_name(self, to_string):
+   220          """
+   221          For a given model string (e.g. "auth.User"), return the name of the
+   222          corresponding settings name if it refers to a swappable model. If the
+   223          referred model is not swappable, return None.
+        
+   224          This method is decorated with lru_cache because it's performance
+   225          critical when it comes to migrations. Since the swappable settings don't
+   226          change after Django has loaded the settings, there is no reason to get
+   227          the respective settings attribute over and over again.
+   228          """
+   229          for model in self.get_models(include_swapped=True):
+   230              swapped = model._meta.swapped
+   231              # Is this model swapped out for the model given by to_string?
+   232              if swapped and swapped == to_string:
+   233                  return model._meta.swappable
+   234              # Is this model swappable and the one given by to_string?
+   235              if model._meta.swappable and model._meta.label == to_string:
+   236                  return model._meta.swappable
+   237          return None
+        
+   238      def set_available_apps(self, available):
+   239          """
+   240          Restricts the set of installed apps used by get_app_config[s].
+        
+   241          available must be an iterable of application names.
+        
+   242          set_available_apps() must be balanced with unset_available_apps().
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll detect the file's indentation to ensure any edit preserves the existing style before making the minimal change to the allow_migrate model iteration.
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+django/core/management/commands/makemigrations.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+The makemigrations code is iterating over all models because apps.get_models() was (incorrectly) called with an app_label argument; I'll replace the single line to call the app-specific AppConfig.get_models() so allow_migrate gets correct (app_label, model) pairs.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+django/core/management/commands/makemigrations.py
+----ARG----
+old_text
+for model in apps.get_models(app_label)
+----ARG----
+new_text
+for model in apps.get_app_config(app_label).get_models()
+----ARG----
+count
+1
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+✓ Successfully replaced 1 occurrence(s) in django/core/management/commands/makemigrations.py.
+Found 1 total occurrence(s) of the text.
+TIP: Call show_file to verify the change was correct.
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I replaced the global apps.get_models call with the app-specific apps.get_app_config(...).get_models() to pass correct (app_label, model) pairs to router.allow_migrate; I'll display the edited region to verify the change and indentation. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/management/commands/makemigrations.py
+----ARG----
+start_line
+86
+----ARG----
+end_line
+101
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+····86                  apps.get_app_config(app_label)
+····87              except LookupError:
+····88                  bad_app_labels.add(app_label)
+····89          if bad_app_labels:
+····90              for app_label in bad_app_labels:
+····91                  self.stderr.write("App '%s' could not be found. Is it in INSTALLED_APPS?" % app_label)
+····92              sys.exit(2)
+········
+····93          # Load the current graph state. Pass in None for the connection so
+····94          # the loader doesn't try to resolve replaced migrations from DB.
+····95          loader = MigrationLoader(None, ignore_no_migrations=True)
+········
+····96          # Raise an error if any migrations are applied before their dependencies.
+····97          consistency_check_labels = set(config.label for config in apps.get_app_configs())
+····98          # Non-default databases are only checked if database routers used.
+····99          aliases_to_check = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
+
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+The edit was made; I'll display the surrounding lines (95–101) with whitespace highlighted to verify the replacement and indentation are correct. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/management/commands/makemigrations.py
+----ARG----
+start_line
+95
+----ARG----
+end_line
+101
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+····95          # the loader doesn't try to resolve replaced migrations from DB.
+····96          loader = MigrationLoader(None, ignore_no_migrations=True)
+········
+····97          # Raise an error if any migrations are applied before their dependencies.
+····98          consistency_check_labels = set(config.label for config in apps.get_app_configs())
+····99          # Non-default databases are only checked if database routers used.
+···100          aliases_to_check = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
+
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I'll run the comprehensive verification (syntax, git diff, modified files) to ensure the change is correct before finishing.
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 1
+   Lines deleted: 1
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/django/core/management/commands/makemigrations.py b/django/core/management/commands/makemigrations.py
+index 0b39536f5b..e648880ef0 100644
+--- a/django/core/management/commands/makemigrations.py
++++ b/django/core/management/commands/makemigrations.py
+@@ -105,7 +105,7 @@ class Command(BaseCommand):
+                     # At least one model must be migrated to the database.
+                     router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
+                     for app_label in consistency_check_labels
+-                    for model in apps.get_models(app_label)
++                    for model in apps.get_app_config(app_label).get_models()
+             )):
+                 loader.check_consistent_history(connection)
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+

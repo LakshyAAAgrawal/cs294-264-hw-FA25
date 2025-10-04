@@ -1,0 +1,2134 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Shows git diff preview of all changes
+5. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+collect_factor_and_dimension does not detect equivalent dimensions in addition
+Code to reproduce:
+```python
+from sympy.physics import units
+from sympy.physics.units.systems.si import SI
+
+v1 = units.Quantity('v1')
+SI.set_quantity_dimension(v1, units.velocity)
+SI.set_quantity_scale_factor(v1, 2 * units.meter / units.second)
+
+a1 = units.Quantity('a1')
+SI.set_quantity_dimension(a1, units.acceleration)
+SI.set_quantity_scale_factor(a1, -9.8 * units.meter / units.second**2)
+
+t1 = units.Quantity('t1')
+SI.set_quantity_dimension(t1, units.time)
+SI.set_quantity_scale_factor(t1, 5 * units.second)
+
+expr1 = a1*t1 + v1
+SI._collect_factor_and_dimension(expr1)
+```
+Results in:
+```
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "C:\Python\Python310\lib\site-packages\sympy\physics\units\unitsystem.py", line 179, in _collect_factor_and_dimension
+    raise ValueError(
+ValueError: Dimension of "v1" is Dimension(velocity), but it should be Dimension(acceleration*time)
+```
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll inspect the repository root to find the units/unitsystem.py file and related tests so I can reproduce and fix the issue. I'll start by listing top-level files and directories. 
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+total 392
+drwxrwxrwx  1 root root  4096 Sep 10 16:54 .
+drwxr-xr-x  1 root root  4096 Oct  4 19:45 ..
+drwxrwxrwx  2 root root  4096 Sep 10 16:50 .ci
+drwxrwxrwx  2 root root  4096 Sep 10 16:50 .circleci
+-rw-r--r--  1 root root   497 Sep 10 16:50 .editorconfig
+drwxrwxrwx  8 root root  4096 Sep 10 16:54 .git
+-rw-r--r--  1 root root   139 Sep 10 16:50 .gitattributes
+drwxrwxrwx  3 root root  4096 Sep 10 16:50 .github
+-rw-r--r--  1 root root  1868 Sep 10 16:50 .gitignore
+-rw-r--r--  1 root root 76445 Sep 10 16:50 .mailmap
+-rw-r--r--  1 root root  4752 Sep 10 16:50 .travis.yml
+-rw-r--r--  1 root root 46765 Sep 10 16:50 AUTHORS
+-rw-r--r--  1 root root   590 Sep 10 16:50 CODEOWNERS
+-rw-r--r--  1 root root  3267 Sep 10 16:50 CODE_OF_CONDUCT.md
+-rw-r--r--  1 root root   625 Sep 10 16:50 CONTRIBUTING.md
+-rw-r--r--  1 root root  7885 Sep 10 16:50 LICENSE
+-rw-r--r--  1 root root   496 Sep 10 16:50 MANIFEST.in
+-rw-r--r--  1 root root  1168 Sep 10 16:50 PULL_REQUEST_TEMPLATE.md
+-rw-r--r--  1 root root 11587 Sep 10 16:50 README.md
+-rw-r--r--  1 root root  3141 Sep 10 16:50 asv.conf.actions.json
+-rw-r--r--  1 root root  2774 Sep 10 16:50 asv.conf.travis.json
+-rw-r--r--  1 root root 87868 Sep 10 16:50 banner.svg
+drwxrwxrwx  2 root root  4096 Sep 10 16:50 bin
+-rw-r--r--  1 root root   196 Sep 10 16:50 codecov.yml
+-rw-r--r--  1 root root  2944 Sep 10 16:50 conftest.py
+-rw-r--r--  1 root root   316 Sep 10 16:50 coveragerc_travis
+drwxrwxrwx  3 root root  4096 Sep 10 16:50 data
+drwxrwxrwx  7 root root  4096 Sep 10 16:50 doc
+drwxr-xr-x  6 root root  4096 Sep 10 16:50 examples
+-rw-r--r--  1 root root  4408 Sep 10 16:50 github_deploy_key.enc
+-rw-r--r--  1 root root 11199 Sep 10 16:50 isympy.py
+-rw-r--r--  1 root root   424 Sep 10 16:50 pytest.ini
+drwxrwxrwx  2 root root  4096 Sep 10 16:50 release
+-rw-r--r--  1 root root  2088 Sep 10 16:50 setup.cfg
+-rwxr-xr-x  1 root root 15142 Sep 10 16:50 setup.py
+-rw-r--r--  1 root root    49 Sep 10 16:50 setupegg.py
+drwxrwxrwx 42 root root  4096 Sep 10 16:50 sympy
+drwxr-xr-x  2 root root  4096 Sep 10 16:54 sympy.egg-info
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I will locate the unitsystem.py file to inspect _collect_factor_and_dimension. 
+----BEGIN_FUNCTION_CALL----
+find_file
+----ARG----
+filename
+*unitsystem.py
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+./sympy/physics/units/tests/test_unitsystem.py
+./sympy/physics/units/unitsystem.py
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll open sympy/physics/units/unitsystem.py to inspect the _collect_factor_and_dimension implementation and nearby helpers. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sympy/physics/units/unitsystem.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+     1  """
+     2  Unit system for physical quantities; include definition of constants.
+     3  """
+        
+     4  from typing import Dict as tDict, Set as tSet
+        
+     5  from sympy.core.add import Add
+     6  from sympy.core.function import (Derivative, Function)
+     7  from sympy.core.mul import Mul
+     8  from sympy.core.power import Pow
+     9  from sympy.core.singleton import S
+    10  from sympy.physics.units.dimensions import _QuantityMapper
+    11  from sympy.physics.units.quantities import Quantity
+        
+    12  from .dimensions import Dimension
+        
+        
+    13  class UnitSystem(_QuantityMapper):
+    14      """
+    15      UnitSystem represents a coherent set of units.
+        
+    16      A unit system is basically a dimension system with notions of scales. Many
+    17      of the methods are defined in the same way.
+        
+    18      It is much better if all base units have a symbol.
+    19      """
+        
+    20      _unit_systems = {}  # type: tDict[str, UnitSystem]
+        
+    21      def __init__(self, base_units, units=(), name="", descr="", dimension_system=None, derived_units: tDict[Dimension, Quantity]={}):
+        
+    22          UnitSystem._unit_systems[name] = self
+        
+    23          self.name = name
+    24          self.descr = descr
+        
+    25          self._base_units = base_units
+    26          self._dimension_system = dimension_system
+    27          self._units = tuple(set(base_units) | set(units))
+    28          self._base_units = tuple(base_units)
+    29          self._derived_units = derived_units
+        
+    30          super().__init__()
+        
+    31      def __str__(self):
+    32          """
+    33          Return the name of the system.
+        
+    34          If it does not exist, then it makes a list of symbols (or names) of
+    35          the base dimensions.
+    36          """
+        
+    37          if self.name != "":
+    38              return self.name
+    39          else:
+    40              return "UnitSystem((%s))" % ", ".join(
+    41                  str(d) for d in self._base_units)
+        
+    42      def __repr__(self):
+    43          return '<UnitSystem: %s>' % repr(self._base_units)
+        
+    44      def extend(self, base, units=(), name="", description="", dimension_system=None, derived_units: tDict[Dimension, Quantity]={}):
+    45          """Extend the current system into a new one.
+        
+    46          Take the base and normal units of the current system to merge
+    47          them to the base and normal units given in argument.
+    48          If not provided, name and description are overridden by empty strings.
+    49          """
+        
+    50          base = self._base_units + tuple(base)
+    51          units = self._units + tuple(units)
+        
+    52          return UnitSystem(base, units, name, description, dimension_system, {**self._derived_units, **derived_units})
+        
+    53      def get_dimension_system(self):
+    54          return self._dimension_system
+        
+    55      def get_quantity_dimension(self, unit):
+    56          qdm = self.get_dimension_system()._quantity_dimension_map
+    57          if unit in qdm:
+    58              return qdm[unit]
+    59          return super().get_quantity_dimension(unit)
+        
+    60      def get_quantity_scale_factor(self, unit):
+    61          qsfm = self.get_dimension_system()._quantity_scale_factors
+    62          if unit in qsfm:
+    63              return qsfm[unit]
+    64          return super().get_quantity_scale_factor(unit)
+        
+    65      @staticmethod
+    66      def get_unit_system(unit_system):
+    67          if isinstance(unit_system, UnitSystem):
+    68              return unit_system
+        
+    69          if unit_system not in UnitSystem._unit_systems:
+    70              raise ValueError(
+    71                  "Unit system is not supported. Currently"
+    72                  "supported unit systems are {}".format(
+    73                      ", ".join(sorted(UnitSystem._unit_systems))
+    74                  )
+    75              )
+        
+    76          return UnitSystem._unit_systems[unit_system]
+        
+    77      @staticmethod
+    78      def get_default_unit_system():
+    79          return UnitSystem._unit_systems["SI"]
+        
+    80      @property
+    81      def dim(self):
+    82          """
+    83          Give the dimension of the system.
+        
+    84          That is return the number of units forming the basis.
+    85          """
+    86          return len(self._base_units)
+        
+    87      @property
+    88      def is_consistent(self):
+    89          """
+    90          Check if the underlying dimension system is consistent.
+    91          """
+    92          # test is performed in DimensionSystem
+    93          return self.get_dimension_system().is_consistent
+        
+    94      @property
+    95      def derived_units(self) -> tDict[Dimension, Quantity]:
+    96          return self._derived_units
+        
+    97      def get_dimensional_expr(self, expr):
+    98          from sympy.physics.units import Quantity
+    99          if isinstance(expr, Mul):
+   100              return Mul(*[self.get_dimensional_expr(i) for i in expr.args])
+   101          elif isinstance(expr, Pow):
+   102              return self.get_dimensional_expr(expr.base) ** expr.exp
+   103          elif isinstance(expr, Add):
+   104              return self.get_dimensional_expr(expr.args[0])
+   105          elif isinstance(expr, Derivative):
+   106              dim = self.get_dimensional_expr(expr.expr)
+   107              for independent, count in expr.variable_count:
+   108                  dim /= self.get_dimensional_expr(independent)**count
+   109              return dim
+   110          elif isinstance(expr, Function):
+   111              args = [self.get_dimensional_expr(arg) for arg in expr.args]
+   112              if all(i == 1 for i in args):
+   113                  return S.One
+   114              return expr.func(*args)
+   115          elif isinstance(expr, Quantity):
+   116              return self.get_quantity_dimension(expr).name
+   117          return S.One
+        
+   118      def _collect_factor_and_dimension(self, expr):
+   119          """
+   120          Return tuple with scale factor expression and dimension expression.
+   121          """
+   122          from sympy.physics.units import Quantity
+   123          if isinstance(expr, Quantity):
+   124              return expr.scale_factor, expr.dimension
+   125          elif isinstance(expr, Mul):
+   126              factor = 1
+   127              dimension = Dimension(1)
+   128              for arg in expr.args:
+   129                  arg_factor, arg_dim = self._collect_factor_and_dimension(arg)
+   130                  factor *= arg_factor
+   131                  dimension *= arg_dim
+   132              return factor, dimension
+   133          elif isinstance(expr, Pow):
+   134              factor, dim = self._collect_factor_and_dimension(expr.base)
+   135              exp_factor, exp_dim = self._collect_factor_and_dimension(expr.exp)
+   136              if self.get_dimension_system().is_dimensionless(exp_dim):
+   137                  exp_dim = 1
+   138              return factor ** exp_factor, dim ** (exp_factor * exp_dim)
+   139          elif isinstance(expr, Add):
+   140              factor, dim = self._collect_factor_and_dimension(expr.args[0])
+   141              for addend in expr.args[1:]:
+   142                  addend_factor, addend_dim = \
+   143                      self._collect_factor_and_dimension(addend)
+   144                  if dim != addend_dim:
+   145                      raise ValueError(
+   146                          'Dimension of "{}" is {}, '
+   147                          'but it should be {}'.format(
+   148                              addend, addend_dim, dim))
+   149                  factor += addend_factor
+   150              return factor, dim
+   151          elif isinstance(expr, Derivative):
+   152              factor, dim = self._collect_factor_and_dimension(expr.args[0])
+   153              for independent, count in expr.variable_count:
+   154                  ifactor, idim = self._collect_factor_and_dimension(independent)
+   155                  factor /= ifactor**count
+   156                  dim /= idim**count
+   157              return factor, dim
+   158          elif isinstance(expr, Function):
+   159              fds = [self._collect_factor_and_dimension(arg) for arg in expr.args]
+   160              dims = [Dimension(1) if self.get_dimension_system().is_dimensionless(d[1]) else d[1] for d in fds]
+   161              return (expr.func(*(f[0] for f in fds)), *dims)
+   162          elif isinstance(expr, Dimension):
+   163              return S.One, expr
+   164          else:
+   165              return expr, Dimension(1)
+        
+   166      def get_units_non_prefixed(self) -> tSet[Quantity]:
+   167          """
+   168          Return the units of the system that do not have a prefix.
+   169          """
+   170          return set(filter(lambda u: not u.is_prefixed and not u.is_physical_constant, self._units))
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I will open the dimensions module to find how Dimension equality/equivalence is tested so I can update _collect_factor_and_dimension to use the dimension-system equivalence instead of direct equality.
+----BEGIN_FUNCTION_CALL----
+find_file
+----ARG----
+filename
+*dimensions.py
+----ARG----
+directory
+sympy/physics/units
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+sympy/physics/units/dimensions.py
+sympy/physics/units/tests/test_dimensions.py
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll open the dimensions.py file to inspect how Dimension equality and equivalence are implemented so I can adjust _collect_factor_and_dimension accordingly.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sympy/physics/units/dimensions.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+     1  """
+     2  Definition of physical dimensions.
+        
+     3  Unit systems will be constructed on top of these dimensions.
+        
+     4  Most of the examples in the doc use MKS system and are presented from the
+     5  computer point of view: from a human point, adding length to time is not legal
+     6  in MKS but it is in natural system; for a computer in natural system there is
+     7  no time dimension (but a velocity dimension instead) - in the basis - so the
+     8  question of adding time to length has no meaning.
+     9  """
+        
+    10  from typing import Dict as tDict
+        
+    11  import collections
+    12  from functools import reduce
+        
+    13  from sympy.core.basic import Basic
+    14  from sympy.core.containers import (Dict, Tuple)
+    15  from sympy.core.singleton import S
+    16  from sympy.core.sorting import default_sort_key
+    17  from sympy.core.symbol import Symbol
+    18  from sympy.core.sympify import sympify
+    19  from sympy.matrices.dense import Matrix
+    20  from sympy.functions.elementary.trigonometric import TrigonometricFunction
+    21  from sympy.core.expr import Expr
+    22  from sympy.core.power import Pow
+        
+        
+    23  class _QuantityMapper:
+        
+    24      _quantity_scale_factors_global = {}  # type: tDict[Expr, Expr]
+    25      _quantity_dimensional_equivalence_map_global = {}  # type: tDict[Expr, Expr]
+    26      _quantity_dimension_global = {}  # type: tDict[Expr, Expr]
+        
+    27      def __init__(self, *args, **kwargs):
+    28          self._quantity_dimension_map = {}
+    29          self._quantity_scale_factors = {}
+        
+    30      def set_quantity_dimension(self, unit, dimension):
+    31          from sympy.physics.units import Quantity
+    32          dimension = sympify(dimension)
+    33          if not isinstance(dimension, Dimension):
+    34              if dimension == 1:
+    35                  dimension = Dimension(1)
+    36              else:
+    37                  raise ValueError("expected dimension or 1")
+    38          elif isinstance(dimension, Quantity):
+    39              dimension = self.get_quantity_dimension(dimension)
+    40          self._quantity_dimension_map[unit] = dimension
+        
+    41      def set_quantity_scale_factor(self, unit, scale_factor):
+    42          from sympy.physics.units import Quantity
+    43          from sympy.physics.units.prefixes import Prefix
+    44          scale_factor = sympify(scale_factor)
+    45          # replace all prefixes by their ratio to canonical units:
+    46          scale_factor = scale_factor.replace(
+    47              lambda x: isinstance(x, Prefix),
+    48              lambda x: x.scale_factor
+    49          )
+    50          # replace all quantities by their ratio to canonical units:
+    51          scale_factor = scale_factor.replace(
+    52              lambda x: isinstance(x, Quantity),
+    53              lambda x: self.get_quantity_scale_factor(x)
+    54          )
+    55          self._quantity_scale_factors[unit] = scale_factor
+        
+    56      def get_quantity_dimension(self, unit):
+    57          from sympy.physics.units import Quantity
+    58          # First look-up the local dimension map, then the global one:
+    59          if unit in self._quantity_dimension_map:
+    60              return self._quantity_dimension_map[unit]
+    61          if unit in self._quantity_dimension_global:
+    62              return self._quantity_dimension_global[unit]
+    63          if unit in self._quantity_dimensional_equivalence_map_global:
+    64              dep_unit = self._quantity_dimensional_equivalence_map_global[unit]
+    65              if isinstance(dep_unit, Quantity):
+    66                  return self.get_quantity_dimension(dep_unit)
+    67              else:
+    68                  return Dimension(self.get_dimensional_expr(dep_unit))
+    69          if isinstance(unit, Quantity):
+    70              return Dimension(unit.name)
+    71          else:
+    72              return Dimension(1)
+        
+    73      def get_quantity_scale_factor(self, unit):
+    74          if unit in self._quantity_scale_factors:
+    75              return self._quantity_scale_factors[unit]
+    76          if unit in self._quantity_scale_factors_global:
+    77              mul_factor, other_unit = self._quantity_scale_factors_global[unit]
+    78              return mul_factor*self.get_quantity_scale_factor(other_unit)
+    79          return S.One
+        
+        
+    80  class Dimension(Expr):
+    81      """
+    82      This class represent the dimension of a physical quantities.
+        
+    83      The ``Dimension`` constructor takes as parameters a name and an optional
+    84      symbol.
+        
+    85      For example, in classical mechanics we know that time is different from
+    86      temperature and dimensions make this difference (but they do not provide
+    87      any measure of these quantites.
+        
+    88          >>> from sympy.physics.units import Dimension
+    89          >>> length = Dimension('length')
+    90          >>> length
+    91          Dimension(length)
+    92          >>> time = Dimension('time')
+    93          >>> time
+    94          Dimension(time)
+        
+    95      Dimensions can be composed using multiplication, division and
+    96      exponentiation (by a number) to give new dimensions. Addition and
+    97      subtraction is defined only when the two objects are the same dimension.
+        
+    98          >>> velocity = length / time
+    99          >>> velocity
+   100          Dimension(length/time)
+        
+   101      It is possible to use a dimension system object to get the dimensionsal
+   102      dependencies of a dimension, for example the dimension system used by the
+   103      SI units convention can be used:
+        
+   104          >>> from sympy.physics.units.systems.si import dimsys_SI
+   105          >>> dimsys_SI.get_dimensional_dependencies(velocity)
+   106          {Dimension(length, L): 1, Dimension(time, T): -1}
+   107          >>> length + length
+   108          Dimension(length)
+   109          >>> l2 = length**2
+   110          >>> l2
+   111          Dimension(length**2)
+   112          >>> dimsys_SI.get_dimensional_dependencies(l2)
+   113          {Dimension(length, L): 2}
+        
+   114      """
+        
+   115      _op_priority = 13.0
+        
+   116      # XXX: This doesn't seem to be used anywhere...
+   117      _dimensional_dependencies = {}  # type: ignore
+        
+   118      is_commutative = True
+   119      is_number = False
+   120      # make sqrt(M**2) --> M
+   121      is_positive = True
+   122      is_real = True
+        
+   123      def __new__(cls, name, symbol=None):
+        
+   124          if isinstance(name, str):
+   125              name = Symbol(name)
+   126          else:
+   127              name = sympify(name)
+        
+   128          if not isinstance(name, Expr):
+   129              raise TypeError("Dimension name needs to be a valid math expression")
+        
+   130          if isinstance(symbol, str):
+   131              symbol = Symbol(symbol)
+   132          elif symbol is not None:
+   133              assert isinstance(symbol, Symbol)
+        
+   134          obj = Expr.__new__(cls, name)
+        
+   135          obj._name = name
+   136          obj._symbol = symbol
+   137          return obj
+        
+   138      @property
+   139      def name(self):
+   140          return self._name
+        
+   141      @property
+   142      def symbol(self):
+   143          return self._symbol
+        
+   144      def __str__(self):
+   145          """
+   146          Display the string representation of the dimension.
+   147          """
+   148          if self.symbol is None:
+   149              return "Dimension(%s)" % (self.name)
+   150          else:
+   151              return "Dimension(%s, %s)" % (self.name, self.symbol)
+        
+   152      def __repr__(self):
+   153          return self.__str__()
+        
+   154      def __neg__(self):
+   155          return self
+        
+   156      def __add__(self, other):
+   157          from sympy.physics.units.quantities import Quantity
+   158          other = sympify(other)
+   159          if isinstance(other, Basic):
+   160              if other.has(Quantity):
+   161                  raise TypeError("cannot sum dimension and quantity")
+   162              if isinstance(other, Dimension) and self == other:
+   163                  return self
+   164              return super().__add__(other)
+   165          return self
+        
+   166      def __radd__(self, other):
+   167          return self.__add__(other)
+        
+   168      def __sub__(self, other):
+   169          # there is no notion of ordering (or magnitude) among dimension,
+   170          # subtraction is equivalent to addition when the operation is legal
+   171          return self + other
+        
+   172      def __rsub__(self, other):
+   173          # there is no notion of ordering (or magnitude) among dimension,
+   174          # subtraction is equivalent to addition when the operation is legal
+   175          return self + other
+        
+   176      def __pow__(self, other):
+   177          return self._eval_power(other)
+        
+   178      def _eval_power(self, other):
+   179          other = sympify(other)
+   180          return Dimension(self.name**other)
+        
+   181      def __mul__(self, other):
+   182          from sympy.physics.units.quantities import Quantity
+   183          if isinstance(other, Basic):
+   184              if other.has(Quantity):
+   185                  raise TypeError("cannot sum dimension and quantity")
+   186              if isinstance(other, Dimension):
+   187                  return Dimension(self.name*other.name)
+   188              if not other.free_symbols:  # other.is_number cannot be used
+   189                  return self
+   190              return super().__mul__(other)
+   191          return self
+        
+   192      def __rmul__(self, other):
+   193          return self.__mul__(other)
+        
+   194      def __truediv__(self, other):
+   195          return self*Pow(other, -1)
+        
+   196      def __rtruediv__(self, other):
+   197          return other * pow(self, -1)
+        
+   198      @classmethod
+   199      def _from_dimensional_dependencies(cls, dependencies):
+   200          return reduce(lambda x, y: x * y, (
+   201              d**e for d, e in dependencies.items()
+   202          ), 1)
+        
+   203      def has_integer_powers(self, dim_sys):
+   204          """
+   205          Check if the dimension object has only integer powers.
+        
+   206          All the dimension powers should be integers, but rational powers may
+   207          appear in intermediate steps. This method may be used to check that the
+   208          final result is well-defined.
+   209          """
+        
+   210          return all(dpow.is_Integer for dpow in dim_sys.get_dimensional_dependencies(self).values())
+        
+        
+   211  # Create dimensions according to the base units in MKSA.
+   212  # For other unit systems, they can be derived by transforming the base
+   213  # dimensional dependency dictionary.
+        
+        
+   214  class DimensionSystem(Basic, _QuantityMapper):
+   215      r"""
+   216      DimensionSystem represents a coherent set of dimensions.
+        
+   217      The constructor takes three parameters:
+        
+   218      - base dimensions;
+   219      - derived dimensions: these are defined in terms of the base dimensions
+   220        (for example velocity is defined from the division of length by time);
+   221      - dependency of dimensions: how the derived dimensions depend
+   222        on the base dimensions.
+        
+   223      Optionally either the ``derived_dims`` or the ``dimensional_dependencies``
+   224      may be omitted.
+   225      """
+        
+   226      def __new__(cls, base_dims, derived_dims=(), dimensional_dependencies={}):
+   227          dimensional_dependencies = dict(dimensional_dependencies)
+        
+   228          def parse_dim(dim):
+   229              if isinstance(dim, str):
+   230                  dim = Dimension(Symbol(dim))
+   231              elif isinstance(dim, Dimension):
+   232                  pass
+   233              elif isinstance(dim, Symbol):
+   234                  dim = Dimension(dim)
+   235              else:
+   236                  raise TypeError("%s wrong type" % dim)
+   237              return dim
+        
+   238          base_dims = [parse_dim(i) for i in base_dims]
+   239          derived_dims = [parse_dim(i) for i in derived_dims]
+        
+   240          for dim in base_dims:
+   241              if (dim in dimensional_dependencies
+   242                  and (len(dimensional_dependencies[dim]) != 1 or
+   243                  dimensional_dependencies[dim].get(dim, None) != 1)):
+   244                  raise IndexError("Repeated value in base dimensions")
+   245              dimensional_dependencies[dim] = Dict({dim: 1})
+        
+   246          def parse_dim_name(dim):
+   247              if isinstance(dim, Dimension):
+   248                  return dim
+   249              elif isinstance(dim, str):
+   250                  return Dimension(Symbol(dim))
+   251              elif isinstance(dim, Symbol):
+   252                  return Dimension(dim)
+   253              else:
+   254                  raise TypeError("unrecognized type %s for %s" % (type(dim), dim))
+        
+   255          for dim in dimensional_dependencies.keys():
+   256              dim = parse_dim(dim)
+   257              if (dim not in derived_dims) and (dim not in base_dims):
+   258                  derived_dims.append(dim)
+        
+   259          def parse_dict(d):
+   260              return Dict({parse_dim_name(i): j for i, j in d.items()})
+        
+   261          # Make sure everything is a SymPy type:
+   262          dimensional_dependencies = {parse_dim_name(i): parse_dict(j) for i, j in
+   263                                      dimensional_dependencies.items()}
+        
+   264          for dim in derived_dims:
+   265              if dim in base_dims:
+   266                  raise ValueError("Dimension %s both in base and derived" % dim)
+   267              if dim not in dimensional_dependencies:
+   268                  # TODO: should this raise a warning?
+   269                  dimensional_dependencies[dim] = Dict({dim: 1})
+        
+   270          base_dims.sort(key=default_sort_key)
+   271          derived_dims.sort(key=default_sort_key)
+        
+   272          base_dims = Tuple(*base_dims)
+   273          derived_dims = Tuple(*derived_dims)
+   274          dimensional_dependencies = Dict({i: Dict(j) for i, j in dimensional_dependencies.items()})
+   275          obj = Basic.__new__(cls, base_dims, derived_dims, dimensional_dependencies)
+   276          return obj
+        
+   277      @property
+   278      def base_dims(self):
+   279          return self.args[0]
+        
+   280      @property
+   281      def derived_dims(self):
+   282          return self.args[1]
+        
+   283      @property
+   284      def dimensional_dependencies(self):
+   285          return self.args[2]
+        
+   286      def _get_dimensional_dependencies_for_name(self, dimension):
+   287          if isinstance(dimension, str):
+   288              dimension = Dimension(Symbol(dimension))
+   289          elif not isinstance(dimension, Dimension):
+   290              dimension = Dimension(dimension)
+        
+   291          if dimension.name.is_Symbol:
+   292              # Dimensions not included in the dependencies are considered
+   293              # as base dimensions:
+   294              return dict(self.dimensional_dependencies.get(dimension, {dimension: 1}))
+        
+   295          if dimension.name.is_number or dimension.name.is_NumberSymbol:
+   296              return {}
+        
+   297          get_for_name = self._get_dimensional_dependencies_for_name
+        
+   298          if dimension.name.is_Mul:
+   299              ret = collections.defaultdict(int)
+   300              dicts = [get_for_name(i) for i in dimension.name.args]
+   301              for d in dicts:
+   302                  for k, v in d.items():
+   303                      ret[k] += v
+   304              return {k: v for (k, v) in ret.items() if v != 0}
+        
+   305          if dimension.name.is_Add:
+   306              dicts = [get_for_name(i) for i in dimension.name.args]
+   307              if all(d == dicts[0] for d in dicts[1:]):
+   308                  return dicts[0]
+   309              raise TypeError("Only equivalent dimensions can be added or subtracted.")
+        
+   310          if dimension.name.is_Pow:
+   311              dim_base = get_for_name(dimension.name.base)
+   312              dim_exp = get_for_name(dimension.name.exp)
+   313              if dim_exp == {} or dimension.name.exp.is_Symbol:
+   314                  return {k: v * dimension.name.exp for (k, v) in dim_base.items()}
+   315              else:
+   316                  raise TypeError("The exponent for the power operator must be a Symbol or dimensionless.")
+        
+   317          if dimension.name.is_Function:
+   318              args = (Dimension._from_dimensional_dependencies(
+   319                  get_for_name(arg)) for arg in dimension.name.args)
+   320              result = dimension.name.func(*args)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll check the file's indentation style before making a minimal change to the Add case to use the dimension system's equivalent_dims check. 
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+sympy/physics/units/unitsystem.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+The Add branch should use the dimension system's equivalence test instead of direct equality; I'll search the repository for relevant methods (e.g., "equivalent" or "equivalence") to find the correct check to call. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+equivalent
+----ARG----
+directory
+.
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+./doc/man/isympy.xml:171:    <para>So starting isympy is equivalent to starting python (or ipython) and
+./doc/man/isympy.xml:270:                        equivalent to '<emphasis>isympy -c python -p no</emphasis>'.
+./doc/man/isympy.1:51:So starting isympy is equivalent to starting python (or ipython) and
+./doc/man/isympy.1:122:equivalent to '\fIisympy -c python -p no\fR'.
+./doc/src/guides/custom-functions.md:1680:has better rounding and performance than the equivalent combination of
+./doc/src/guides/booleans.rst:341::class:`~.And`, :class:`~.Or` and :class:`~.Not` or equivalently Python's
+./doc/src/guides/solving/solve-matrix-equation.md:19:- Solving a matrix equation is equivalent to solving a system of linear
+./doc/src/guides/solving/solve-matrix-equation.md:85:Specifying a method in solve is equivalent to using a specialized solving
+./doc/src/guides/assumptions.rst:803:A symbol declared as ``Symbol('x', real=True, negative=False)`` is equivalent
+./doc/src/modules/integrals/g-functions.rst:118:we (try to) find all inequivalent ways of splitting `f(x)` into a product
+./doc/src/modules/integrals/g-functions.rst:485:shall always mean "asymptotically equivalent up to a positive real
+./doc/src/modules/solvers/diophantine.rst:203:transformed to an equivalent form `X^2 - DY^2 = N`.
+./doc/src/modules/solvers/diophantine.rst:209:So, the above equation is equivalent to the equation `X^2 - 5Y^2 = 920` after
+./doc/src/modules/solvers/diophantine.rst:259:given equation to an equivalent equation of the form `w^2 = AX^2 + BY^2` and
+./doc/src/modules/solvers/diophantine.rst:401:.. autofunction:: sympy.solvers.diophantine.diophantine::equivalent
+./doc/src/modules/combinatorics/pc_groups.rst:172:The two are not identical but they are equivalent:
+./doc/src/modules/combinatorics/fp_groups.rst:104:may be equivalent.
+./doc/src/modules/polys/domainsintro.rst:110:range of possible expressions. It can also represent equivalent expressions in
+./doc/src/modules/polys/domainsintro.rst:119:These two expression although equivalent have different tree representations::
+./doc/src/modules/polys/domainsintro.rst:129:representations makes it hard to tell when two expressions are equivalent
+./doc/src/modules/polys/domainsintro.rst:574:"Galois field" respectively). These are equivalent and both ``FF(n)`` and
+./doc/src/modules/polys/domainsintro.rst:806:it possible to represent equivalent expressions in different ways e.g.::
+./doc/src/modules/polys/domainsintro.rst:862:efficient). The ring ``K[x][y]`` is formally equivalent to ``K[x,y]`` although
+./doc/src/modules/polys/domainsintro.rst:900::py:meth:`~.Domain.old_poly_ring` where the syntax ``K[x]`` is equivalent to
+./doc/src/modules/polys/agca.rst:36:essentially equivalent to the study of certain rings, their ideals and modules.
+./doc/src/modules/polys/agca.rst:222:`x` and `y` of `M` to be equivalent if `x - y \in N`. The set of equivalence
+./doc/src/modules/polys/basics.rst:104:with coefficients in `\mathbb{Z}[\pi]` is mathematically equivalent to
+./doc/src/modules/polys/basics.rst:186:the quotient `a/b` is invertible with inverse `b/a`, or equivalently,
+./doc/src/modules/physics/mechanics/sympy_mechanics_for_autolev_users.rst:85:The tables below give rough equivalents for some common Autolev
+./doc/src/modules/physics/mechanics/sympy_mechanics_for_autolev_users.rst:86:expressions. **These are not exact equivalents**, but rather should be
+./doc/src/modules/physics/mechanics/sympy_mechanics_for_autolev_users.rst:376:|                       | are equivalent to     | refer to              |
+./doc/src/modules/physics/mechanics/sympy_mechanics_for_autolev_users.rst:697:One will be able to write code equivalent to the Matlab, C or Fortran
+./doc/src/modules/physics/mechanics/autolev_parser.rst:535:- The SymPy equivalent of the ``TAYLOR`` command ``.series()`` does not work
+./doc/src/modules/physics/mechanics/autolev_parser.rst:544:  to SymPy. For instance, SymPy doesn't have a function equivalent to ``NICHECK()``.
+./doc/src/modules/physics/vector/vectors.rst:50:Note that multiplication by -1 is equivalent to rotating the vector by 180
+./doc/src/modules/physics/vector/vectors.rst:494:equivalent, but one is much simpler. This is an extremely important concept, as
+./doc/src/modules/physics/vector/vectors.rst:640:equivalent to doing 3 simple rotations in a row, each about a basis vector in
+./doc/src/modules/physics/control/control.rst:14:``MIMOParallel``  and ``MIMOFeedback`` are MIMO equivalent of ``Series``, ``Parallel``
+./doc/src/modules/physics/units/examples.rst:54:    >>> dimsys_SI.equivalent_dims(F, force)
+./doc/src/modules/evalf.rst:12:``N(expr, <args>)`` is equivalent to ``sympify(expr).evalf(<args>)``.
+./doc/src/explanation/active-deprecations.md:968:  instead of `_sympify()` (or equivalently `sympify(strict=True)`), but
+./doc/src/explanation/glossary.md:151:    and the resulting expression will still be mathematically equivalent.
+./doc/src/explanation/glossary.md:161:    Often expressions can be written in multiple, mathematically equivalent
+./doc/src/explanation/glossary.md:163:    all equivalent expressions can be transformed to. An expression that is
+./doc/src/explanation/glossary.md:546:    into another expression that is mathematically equivalent but which is
+./doc/src/explanation/glossary.md:639:    <simplification>` to equivalent symbolic expressions using those
+./doc/src/explanation/solve_output.rst:128:    use of :func:`~.solve` here is equivalent to passing the equation set and
+./doc/src/explanation/gotchas.rst:234:equivalent to :ref:`evalf()<evalf-label>` ), the `big O
+./doc/src/contributing/deprecations.md:104:  return a different but mathematically equivalent form of the same
+./doc/src/contributing/deprecations.md:513:  it is trivially equivalent to `is_this_zero(x - y)`. Furthermore, allowing
+./sympy/series/tests/test_gruntz.py:330:    #both of these are correct and should be equivalent:
+./sympy/series/tests/test_series.py:109:    # This result is equivalent to zero, zero is not return because
+./sympy/series/order.py:25:    `|x-a| < \delta`.  This is equivalent to `\lim_{x \rightarrow a}
+./sympy/integrals/tests/test_integrals.py:113:    # is equivalent to testing Sum's
+./sympy/integrals/tests/test_integrals.py:962:    # `foo.is_number` should always be equivalent to `not foo.free_symbols`
+./sympy/integrals/rde.py:109:    elementary integral, this is equivalent to no logarithm of
+./sympy/integrals/integrals.py:731:        Whenever an Integral is encountered that is equivalent to zero or
+./sympy/integrals/integrals.py:1245:        intervals. This is equivalent to taking the average of the left and
+./sympy/integrals/risch.py:1216:    rational function if and only if Ei = 1 for each i, which is equivalent to
+./sympy/integrals/risch.py:1726:    equivalent) solution (for an example of this, see issue 5109).  It is also
+./sympy/integrals/rubi/parsetools/parse.py:50:replacements = dict(  # Mathematica equivalent functions in SymPy
+./sympy/integrals/rubi/utility_function.py:1139:    # If u is equivalent to a trinomial of the form a + b*x^n + c*x^(2*n) where n!=0, b!=0 and c!=0, TrinomialParts[u,x] returns the list {a,b,c,n}; else it returns False.
+./sympy/integrals/rubi/utility_function.py:1930:    If u is equivalent to an expression of the form a + b*x**n, BinomialQ(u, x, n) returns True, else it returns False.
+./sympy/integrals/rubi/utility_function.py:1954:    If u is equivalent to an expression of the form a + b*x**n + c*x**(2*n) where n, b and c are not 0,
+./sympy/integrals/rubi/utility_function.py:1984:    If u is equivalent to an expression of the form a*x**q+b*x**n where n, q and b are not 0,
+./sympy/integrals/rubi/utility_function.py:2002:    If u is equivalent to an expression of the form a*x**q+b*x**n+c*x**(2*n-q) where n, q, b and c are not 0,
+./sympy/integrals/rubi/utility_function.py:2026:    # If u (x) is equivalent to a polynomial raised to an integer power greater than 1,
+./sympy/integrals/rubi/utility_function.py:2349:    # If u is equivalent to a trinomial of the form a + b*x^n + c*x^(2*n) where n!=0, b!=0 and c!=0, TrinomialDegree[u,x] returns n
+./sympy/integrals/rubi/utility_function.py:2728:    # If u is equivalent to an expression of the form (a+b*x)/(c+d*x), QuotientOfLinearsParts[u,x]
+./sympy/integrals/rubi/utility_function.py:2759:    # (*QuotientOfLinearsQ[u,x] returns True iff u is equivalent to an expression of the form (a+b x)/(c+d x) where b!=0 and d!=0.*)
+./sympy/integrals/rubi/utility_function.py:3329:    # (* If u (x) is equivalent to an expression of the form f (a+b*x) and not the case that a==0 and
+./sympy/integrals/rubi/utility_function.py:3886:    # (* If u (x) is equivalent to a function of the form f (Sinh[v],Cosh[v],Tanh[v],Coth[v],Sech[v],Csch[v])
+./sympy/integrals/rubi/utility_function.py:4869:    # If u (x) is equivalent to a function of the form f (Sin[v],Cos[v],Tan[v],Cot[v],Sec[v],Csc[v]) where f is independent of x, FunctionOfTrigQ[u,v,x] returns True; else it returns False.
+./sympy/integrals/rubi/utility_function.py:4887:    # If u (x) is equivalent to an expression of the form f (Log[a*x^n]), FunctionOfLog[u,x] returns
+./sympy/solvers/diophantine/tests/test_diophantine.py:18:    descent, diop_bf_DN, divisible, equivalent, find_DN, ldescent, length,
+./sympy/solvers/diophantine/tests/test_diophantine.py:49:    # diophantine should sympify eq so that these are equivalent
+./sympy/solvers/diophantine/tests/test_diophantine.py:252:    # So (-3, 1) and (393, 109) should be in the same equivalent class
+./sympy/solvers/diophantine/tests/test_diophantine.py:253:    assert equivalent(-3, 1, 393, 109, 13, -4) == True
+./sympy/solvers/diophantine/tests/test_diophantine.py:268:    assert equivalent(11, 1, -11, 1, 123, -2)
+./sympy/solvers/diophantine/diophantine.py:2465:            if not equivalent(x, y, -x, y, D, N):
+./sympy/solvers/diophantine/diophantine.py:2471:def equivalent(u, v, r, s, D, N):
+./sympy/solvers/diophantine/diophantine.py:2488:    ``equivalent(u, v, r, s, D, N)``: `(u, v)` and `(r, s)` are two solutions
+./sympy/solvers/diophantine/diophantine.py:2494:    >>> from sympy.solvers.diophantine.diophantine import equivalent
+./sympy/solvers/diophantine/diophantine.py:2495:    >>> equivalent(18, 5, -18, -5, 13, -1)
+./sympy/solvers/diophantine/diophantine.py:2497:    >>> equivalent(3, 1, -18, 393, 109, -4)
+./sympy/solvers/diophantine/diophantine.py:2695:    Solving the general quadratic is then equivalent to solving the equation
+./sympy/solvers/diophantine/diophantine.py:2981:    Except for sign and a common factor, these are equivalent to
+./sympy/solvers/diophantine/diophantine.py:3176:    Reconstruct the `z` value of an equivalent solution of `ax^2 + by^2 + cz^2`
+./sympy/solvers/recurr.py:89:    initial equation to an equivalent one for which the system of
+./sympy/solvers/recurr.py:683:    or equivalently:
+./sympy/solvers/tests/test_solveset.py:3045:    # The solution set of nonlinsolve is currently equivalent to linsolve and is
+./sympy/solvers/tests/test_solveset.py:3048:    # We want a solution that is not just equivalent but also given in the same form.
+./sympy/solvers/solvers.py:535:          equivalent to the expression obtained:
+./sympy/solvers/solveset.py:1680:    equation can be solved by rewriting the equation as an equivalent
+./sympy/solvers/bivariate.py:429:    ``y`` is equivalent to solving the original expression for ``x`` or
+./sympy/solvers/ode/riccati.py:536:    # s_oo = lim x->0 1/x**2 * a(1/x) which is equivalent to
+./sympy/solvers/ode/tests/test_single.py:1851:    equivalent, but it is so complex that checkodesol fails, and takes a long
+./sympy/solvers/ode/ode.py:489:        - Because all solutions should be mathematically equivalent, some
+./sympy/solvers/ode/ode.py:492:          differently.  The two should be equivalent. Also note that sometimes
+./sympy/solvers/ode/ode.py:2197:    of any order is equivalent to being able to rewrite `F(x, y)` as `G(x/y)`
+./sympy/solvers/ode/ode.py:2618:    f(x) = x + C1 and in this case the two solutions are not equivalent wrt
+./sympy/concrete/tests/test_sums_products.py:725:    # it should be equivalent to `not foo.free_symbols`
+./sympy/concrete/guess.py:408:    (other formulas may be found; however they may be equivalent to the first
+./sympy/combinatorics/homomorphisms.py:92:            # because that would be equivalent to
+./sympy/combinatorics/tests/test_tensor_can.py:47:    # equivalently
+./sympy/combinatorics/tests/test_homomorphisms.py:79:    # FpGroup is converted to the equivalent isomorphic group.
+./sympy/combinatorics/free_groups.py:707:        This is equivalent to saying that the external representations
+./sympy/combinatorics/tensor_can.py:202:    of equivalent ways which typically grows exponentially with
+./sympy/combinatorics/tensor_can.py:211:    and that the class of tensors equivalent to it under slot and dummy
+./sympy/combinatorics/tensor_can.py:212:    symmetries is equivalent to the double coset `D*g*S`
+./sympy/combinatorics/tensor_can.py:251:    and symmetric metric, find the tensor equivalent to it which
+./sympy/combinatorics/tensor_can.py:305:    to equivalent tensors; if there are two `h` which are the same apart
+./sympy/combinatorics/fp_groups.py:892:    # For each 0!=alpha in [0 .. nc-1], we start by constructing the equivalent
+./sympy/combinatorics/fp_groups.py:1020:    # elimination will have shorter strings as equivalent
+./sympy/combinatorics/fp_groups.py:1249:    shortest equivalent string at each stage.
+./sympy/combinatorics/pc_groups.py:323:        The two are not identical, but they are equivalent:
+./sympy/combinatorics/rewritingsystem.py:105:        # The following is the equivalent of checking
+./sympy/combinatorics/permutations.py:1464:        The expression q^p^r is equivalent to q^(p*r):
+./sympy/combinatorics/permutations.py:1503:        The conjugate ~r*p*r was chosen so that ``p^q^r`` would be equivalent
+./sympy/core/expr.py:3110:        This is equivalent to ``self.series(x, oo, n)``.
+./sympy/core/basic.py:1258:        Note that ``expr.has(*patterns)`` is exactly equivalent to
+./sympy/core/basic.py:1847:        equivalent but structurally different. For example you can rewrite
+./sympy/core/tests/test_eval.py:38:    #     to their complex equivalent
+./sympy/core/function.py:1702:        # equivalent to self or if old is a subderivative of self.
+./sympy/core/function.py:2725:      used.  Both are equivalent::
+./sympy/core/function.py:3098:        with the core class types (or their virtual equivalent) multiplied by the
+./sympy/core/sorting.py:35:    The following are equivalent ways of getting the key for an object:
+./sympy/core/evalf.py:1730:    Both .n() and N() are equivalent to .evalf(); use the one that you like better.
+./sympy/core/operations.py:228:        equivalent.
+./sympy/core/numbers.py:1503:    a string (which is roughly equivalent to limiting the denominator to
+./sympy/core/mul.py:1780:                # the bases must be equivalent in succession, and
+./sympy/core/symbol.py:313:        # compute a minimal equivalent assumption set.
+./sympy/core/sympify.py:223:    operators will be converted into their SymPy equivalents and the
+./sympy/core/sympify.py:226:    operators with their SymPy equivalents, so if an operand redefines any
+./sympy/core/sympify.py:350:        their SymPy equivalents. If True the expression will be evaluated
+./sympy/logic/algorithms/dpll.py:175:    Returns an equivalent set of clauses
+./sympy/logic/boolalg.py:1184:    A implies B is equivalent to if A then B. Mathematically, it is written
+./sympy/logic/boolalg.py:1185:    as `A \Rightarrow B` and is equivalent to `\neg A \vee B` or ``~A | B``.
+./sympy/logic/boolalg.py:1270:    Returns True if all of the arguments are logically equivalent.
+./sympy/logic/boolalg.py:1273:    For two arguments, this is equivalent to :py:class:`~.Xnor`.
+./sympy/logic/boolalg.py:1469:    ``Exclusive(A, B, C)`` is equivalent to ``~(A & B) & ~(A & C) & ~(B & C)``.
+./sympy/logic/boolalg.py:1471:    For two arguments, this is equivalent to :py:class:`~.Xor`.
+./sympy/logic/boolalg.py:1533:    of literals, return an equivalent sentence in CNF.
+./sympy/logic/boolalg.py:1550:    of literals, return an equivalent sentence in DNF.
+./sympy/logic/boolalg.py:1570:    equivalent exclusive disjunction.
+./sympy/logic/boolalg.py:1614:    equivalent formulas will convert to the same ANF.
+./sympy/logic/boolalg.py:1931:    That is, return an expression that is equivalent to ``expr``, but has only
+./sympy/logic/boolalg.py:2984:    For example, ``And(x, y)`` is logically equivalent to ``And(a, b)`` for
+./sympy/crypto/crypto.py:334:    ``decipher_rot13`` is equivalent to ``encipher_rot13`` as both
+./sympy/crypto/crypto.py:478:    Atbash is functionally equivalent to the affine cipher with ``a = 25``
+./sympy/crypto/crypto.py:497:    ``decipher_atbash`` is functionally equivalent to ``encipher_atbash``.
+./sympy/polys/polyroots.py:851:    roots are returned (this is equivalent to setting ``filter='C'``).
+./sympy/polys/domains/domain.py:822:        """Returns ``True`` if two domains are equivalent. """
+./sympy/polys/domains/domain.py:826:        """Returns ``False`` if two domains are equivalent. """
+./sympy/polys/domains/domain.py:1122:        ``K.quo(a, b)`` is equivalent to ``K.div(a, b)[0]``. See
+./sympy/polys/domains/domain.py:1137:        ``K.rem(a, b)`` is equivalent to ``K.div(a, b)[1]``. See
+./sympy/polys/domains/polynomialring.py:65:        """Returns `True` if two domains are equivalent. """
+./sympy/polys/domains/gaussiandomains.py:621:        """Get equivalent domain as an ``AlgebraicField``. """
+./sympy/polys/domains/old_polynomialring.py:64:        """Returns ``True`` if two domains are equivalent. """
+./sympy/polys/domains/old_fractionfield.py:45:        """Returns ``True`` if two domains are equivalent. """
+./sympy/polys/domains/finitefield.py:134:        """Returns ``True`` if two domains are equivalent. """
+./sympy/polys/domains/fractionfield.py:66:        """Returns ``True`` if two domains are equivalent. """
+./sympy/polys/domains/algebraicfield.py:223:    extensions like ``QQ(x)(sqrt(x**2 - 2))``. This is equivalent to the
+./sympy/polys/domains/algebraicfield.py:330:        """Returns ``True`` if two domains are equivalent. """
+./sympy/polys/domains/quotientring.py:145:        """Returns ``True`` if two domains are equivalent. """
+./sympy/polys/subresultants_qq_zz.py:632:    in this module because it returns a matrix equivalent to sylvester2.
+./sympy/polys/subresultants_qq_zz.py:859:        ## the bezout matrix is equivalent to sylvester2
+./sympy/polys/numberfields/primes.py:369:        an element equivalent to rational *p* can and should be omitted (since
+./sympy/polys/numberfields/modules.py:1427:        equivalent to this one, and one equivalent to the other.
+./sympy/polys/numberfields/modules.py:1440:            same :py:class:`~.Module`, ``e1`` is equivalent to ``self``, and
+./sympy/polys/numberfields/modules.py:1441:            ``e2`` is equivalent to ``other``.
+./sympy/polys/numberfields/modules.py:1464:        A :py:class:`~.ModuleElement` may test as equivalent to a rational
+./sympy/polys/numberfields/modules.py:1705:        """Convert to an equivalent :py:class:`~.ANP`. """
+./sympy/polys/numberfields/modules.py:1710:        Try to convert to an equivalent :py:class:`~.AlgebraicNumber`.
+./sympy/polys/polyoptions.py:51:    """An option that must have a boolean value or equivalent assigned. """
+./sympy/polys/agca/modules.py:366:        zero ring, then this is equivalent to the rank being zero.)
+./sympy/tensor/index_methods.py:434:        # do nothing to identify equivalent terms here, as this would require
+./sympy/tensor/array/expressions/from_array_to_matrix.py:352:    # The matrix expression has to be equivalent to the tensor product of the
+./sympy/tensor/array/expressions/from_array_to_matrix.py:373:                # Ignore identity matrices of shape (1, 1) - they are equivalent to scalar 1.
+./sympy/tensor/array/expressions/from_array_to_matrix.py:378:            # Matrix is equivalent to scalar:
+./sympy/tensor/array/expressions/__init__.py:22:``ArraySymbol`` objects are the N-dimensional equivalent of ``MatrixSymbol``
+./sympy/tensor/array/expressions/array_expressions.py:428:    simplified, the expression is equivalent:
+./sympy/tensor/array/__init__.py:128:The matrix trace is equivalent to the contraction of a rank-2 array:
+./sympy/tensor/array/__init__.py:135:Matrix product is equivalent to a tensor product of two rank-2 arrays, followed
+./sympy/tensor/array/__init__.py:144:One may verify that the matrix product is equivalent:
+./sympy/tensor/array/__init__.py:152:or equivalently
+./sympy/tensor/array/__init__.py:169:where `\tilde{A}` is the array equivalent to the diagonal of `A` at positions
+./sympy/tensor/array/arrayop.py:201:    This is equivalent to multiplying the expression by Kronecker deltas
+./sympy/tensor/array/arrayop.py:210:    equivalent to the diagonal of the matrix:
+./sympy/tensor/tensor.py:1476:        ``(1)``         vector, equivalent to ``TensorSymmetry.fully_symmetric(1)``
+./sympy/tensor/tensor.py:1477:        ``(2)``         tensor with 2 symmetric indices, equivalent to ``.fully_symmetric(2)``
+./sympy/tensor/tensor.py:1478:        ``(-2)``        tensor with 2 antisymmetric indices, equivalent to ``.fully_symmetric(-2)``
+./sympy/tensor/tensor.py:4130:    replace Riemann tensor with an equivalent expression
+./sympy/tensor/tensor.py:4145:    Replace each Riemann tensor with an equivalent expression
+./sympy/tensor/indexed.py:382:      -  The IndexedBase object symbolizes a mathematical structure equivalent
+./sympy/sets/fancysets.py:536:    The stop value is made canonical so equivalent ranges always
+./sympy/sets/fancysets.py:686:        """Return an equivalent Range in the opposite order.
+./sympy/sets/fancysets.py:852:                    # equivalent reversed values
+./sympy/printing/fortran.py:114:        'equivalent': '.eqv.',
+./sympy/printing/theanocode.py:464:        ``theano_function([x, y], [...], dim=2)`` is equivalent to using
+./sympy/printing/tests/test_theanocode.py:145:    equivalents, as many of the other tests depend on this.
+./sympy/printing/tests/test_theanocode.py:478:    # Pairs of objects which should be considered equivalent with respect to caching
+./sympy/printing/tests/test_theanocode.py:495:        # Test hit with different but equivalent instance
+./sympy/printing/tests/test_aesaracode.py:151:    equivalents, as many of the other tests depend on this.
+./sympy/printing/tests/test_aesaracode.py:486:    # Pairs of objects which should be considered equivalent with respect to caching
+./sympy/printing/tests/test_aesaracode.py:503:        # Test hit with different but equivalent instance
+./sympy/printing/tests/test_latex.py:2242:    # bug because capital greeks that have roman equivalents should not use
+./sympy/printing/smtlib.py:227:        If false, do not modify expr and produce only the S-Expression equivalent of expr.
+./sympy/printing/codeprinter.py:500:        if self._operators.get('equivalent') is None:
+./sympy/printing/codeprinter.py:503:        return (" %s " % self._operators['equivalent']).join(self.parenthesize(a, PREC)
+./sympy/printing/codeprinter.py:874:    """ C++ equivalent of :func:`~.ccode`. """
+./sympy/printing/octave.py:537:            # Matlab two argument zeta is not equivalent to SymPy's
+./sympy/printing/aesaracode.py:437:        ``aesara_function([x, y], [...], dim=2)`` is equivalent to using
+./sympy/printing/latex.py:2:A Printer which converts an expression into its LaTeX equivalent.
+./sympy/functions/elementary/complexes.py:1346:    Turn all numbers in eq into their polar equivalents (under the standard
+./sympy/functions/elementary/tests/test_trigonometric.py:1533:    # equivalent to testing rewrite(pow)
+./sympy/functions/elementary/tests/test_trigonometric.py:1614:    # equivalent to testing rewrite(pow)
+./sympy/functions/elementary/piecewise.py:107:    it is converted to an equivalent :class:`~.ITE` object:
+./sympy/functions/elementary/piecewise.py:1448:    An expression equivalent to ``expr`` but where all :class:`Piecewise` have
+./sympy/functions/combinatorial/numbers.py:2167:    if 3*k >= n:  # or, equivalently, 2*k >= d
+./sympy/functions/special/delta_functions.py:596:        strictly equivalent. For easier usage, we also allow this rewriting
+./sympy/functions/special/gamma_functions.py:418:    The upper incomplete gamma function is also essentially equivalent to the
+./sympy/functions/special/error_functions.py:1317:    The generalised exponential integral is essentially equivalent to the
+./sympy/functions/special/error_functions.py:1444:    This is equivalent to ``expint(1, z)``.
+./sympy/algebras/quaternion.py:132:        """Returns the equivalent quaternion of a matrix. The quaternion will be normalized
+./sympy/algebras/quaternion.py:139:            Input matrix to be converted to equivalent quaternion. M must be special
+./sympy/algebras/quaternion.py:146:            The quaternion equivalent to given matrix.
+./sympy/algebras/quaternion.py:679:        """Returns the equivalent rotation transformation matrix of the quaternion
+./sympy/algebras/quaternion.py:692:            Returns the equivalent rotation transformation matrix of the quaternion
+./sympy/utilities/mathml/data/simple_mmlctop.xsl:128: subset, prsubset, eq, gt, lt, geq, leq; equivalent, factorof
+./sympy/utilities/mathml/data/simple_mmlctop.xsl:1874:                     | geq | leq | equivalent | factorof]">
+./sympy/utilities/mathml/data/simple_mmlctop.xsl:1889:                     | geq | leq | equivalent | factorof]">
+./sympy/utilities/mathml/data/simple_mmlctop.xsl:1947:             or *[1]=lt or *[1]=geq or *[1]=leq or *[1]=equivalent">
+./sympy/utilities/mathml/data/simple_mmlctop.xsl:1972:        <xsl:if test="../*[self::equivalent][1]">
+./sympy/utilities/mathml/data/mmltex.xsl:531:<!-- 4.4.4.7 equivalent -->
+./sympy/utilities/mathml/data/mmltex.xsl:532:<xsl:template match="m:apply[*[1][self::m:equivalent]]">
+./sympy/utilities/mathml/data/mmltex.xsl:1326:<!--		<xsl:when test="starts-with($content,'&#x02261;&#x020E5;')"><xsl:value-of select="' '" /><xsl:call-template name="replaceEntities"><xsl:with-param name="content" select="substring-after($content, '&#x02261;&#x020E5;')"/></xsl:call-template></xsl:when>	reverse not equivalent -->
+./sympy/utilities/mathml/data/mmlctop.xsl:127: subset, prsubset, eq, gt, lt, geq, leq; equivalent, factorof
+./sympy/utilities/mathml/data/mmlctop.xsl:1873:                     | geq | leq | equivalent | factorof]">
+./sympy/utilities/mathml/data/mmlctop.xsl:1888:                     | geq | leq | equivalent | factorof]">
+./sympy/utilities/mathml/data/mmlctop.xsl:1946:             or *[1]=lt or *[1]=geq or *[1]=leq or *[1]=equivalent">
+./sympy/utilities/mathml/data/mmlctop.xsl:1971:        <xsl:if test="../*[self::equivalent][1]">
+./sympy/utilities/misc.py:40:    equivalent to the input.  The lines will be surrounded by
+./sympy/utilities/misc.py:91:    """Return a cut-and-pastable string that, when printed, is equivalent
+./sympy/utilities/pkgdata.py:5:The getResource function is equivalent to the standard idioms, such as
+./sympy/utilities/_compilation/util.py:51:    """ Create directories (equivalent of ``mkdir -p``). """
+./sympy/utilities/lambdify.py:125:    These dictionaries map names of Python functions to their equivalent in
+./sympy/utilities/lambdify.py:199:    equivalent NumPy function that numerically evaluates it:
+./sympy/utilities/lambdify.py:218:    equivalent numeric function.
+./sympy/utilities/lambdify.py:223:    ``lambdify`` to convert this to an equivalent function for numerical
+./sympy/utilities/lambdify.py:226:    equivalent NumPy function ``f``, and called it on a NumPy array ``a``.
+./sympy/utilities/lambdify.py:322:          (i.e., ``modules=numpy`` is equivalent to ``modules="numpy"``).
+./sympy/utilities/lambdify.py:572:    dictionary, as if it were the module globals. The following is equivalent
+./sympy/stats/tests/test_stochastic_process.py:729:                                1 - lowergamma(g, 3*l)/gamma(g) # equivalent to P(X(1)>3)
+./sympy/stats/tests/test_continuous_rv.py:347:    # X and Y should be equivalent
+./sympy/stats/tests/test_continuous_rv.py:360:    # integrates to something equivalent to 1 and not to 1 exactly
+./sympy/stats/stochastic_process_types.py:1797:                    newrv = rv.pspace.process.simple_rv(rv) # substitute with equivalent simple rv
+./sympy/stats/rv.py:1697:    The following are equivalent to the above but do not pass
+./sympy/calculus/util.py:448:            # is valid. Abs(arg) has behaviour equivalent to
+./sympy/physics/hydrogen.py:89:    # This is an equivalent normalization coefficient, that can be found in
+./sympy/physics/quantum/operatorordering.py:45:    operator expression is equivalent to the argument, but will in general be
+./sympy/physics/quantum/operatorordering.py:173:    normal ordered form is equivalent to the original expression.
+./sympy/physics/quantum/operatorordering.py:217:    expression will not be equivalent to original product.
+./sympy/physics/quantum/operatorordering.py:295:    that this normal order is not equivalent to the original expression, but
+./sympy/physics/quantum/tests/test_identitysearch.py:8:        generate_equivalent_ids, GateIdentity, bfs_identity_search,
+./sympy/physics/quantum/tests/test_identitysearch.py:173:def test_generate_equivalent_ids_1():
+./sympy/physics/quantum/tests/test_identitysearch.py:177:    assert generate_equivalent_ids((x,)) == {(x,)}
+./sympy/physics/quantum/tests/test_identitysearch.py:178:    assert generate_equivalent_ids((x, x)) == {(x, x)}
+./sympy/physics/quantum/tests/test_identitysearch.py:179:    assert generate_equivalent_ids((x, y)) == {(x, y), (y, x)}
+./sympy/physics/quantum/tests/test_identitysearch.py:184:    assert generate_equivalent_ids(gate_seq) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:188:    assert generate_equivalent_ids(gate_seq, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:195:    assert generate_equivalent_ids(gate_seq) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:199:    assert generate_equivalent_ids(gate_seq) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:204:    assert generate_equivalent_ids(gate_seq) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:211:    assert generate_equivalent_ids(gate_seq) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:214:def test_generate_equivalent_ids_2():
+./sympy/physics/quantum/tests/test_identitysearch.py:218:    assert generate_equivalent_ids((x,), return_as_muls=True) == {x}
+./sympy/physics/quantum/tests/test_identitysearch.py:221:    assert generate_equivalent_ids(x*x, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:224:    assert generate_equivalent_ids(x*y, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:227:    assert generate_equivalent_ids(x*y) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:232:    assert generate_equivalent_ids(circuit, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:239:    assert generate_equivalent_ids(circuit, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:243:    assert generate_equivalent_ids(circuit, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:248:    assert generate_equivalent_ids(circuit, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/tests/test_identitysearch.py:255:    assert generate_equivalent_ids(circuit, return_as_muls=True) == gate_ids
+./sympy/physics/quantum/circuitutils.py:393:    one to remove, and returns a shorter yet equivalent circuit.  If no
+./sympy/physics/quantum/circuitutils.py:484:    collapse = lambda acc, an_id: acc + sorted(an_id.equivalent_ids,
+./sympy/physics/quantum/identitysearch.py:16:    'generate_equivalent_ids',
+./sympy/physics/quantum/identitysearch.py:121:    """Checks if a given circuit, in matrix form, is equivalent to
+./sympy/physics/quantum/identitysearch.py:395:    one to find a set of equivalent circuits from a gate identity.
+./sympy/physics/quantum/identitysearch.py:529:def generate_equivalent_ids(gate_seq, return_as_muls=False):
+./sympy/physics/quantum/identitysearch.py:530:    """Returns a set of equivalent gate identities.
+./sympy/physics/quantum/identitysearch.py:538:    to generate the gate rules and, subsequently, to locate equivalent
+./sympy/physics/quantum/identitysearch.py:541:    Note that all equivalent identities are reachable in n operations
+./sympy/physics/quantum/identitysearch.py:560:    Find equivalent gate identities from the current circuit with tuples:
+./sympy/physics/quantum/identitysearch.py:562:    >>> from sympy.physics.quantum.identitysearch import generate_equivalent_ids
+./sympy/physics/quantum/identitysearch.py:565:    >>> generate_equivalent_ids((x, x))
+./sympy/physics/quantum/identitysearch.py:568:    >>> generate_equivalent_ids((x, y, z))
+./sympy/physics/quantum/identitysearch.py:572:    Find equivalent gate identities from the current circuit with Muls:
+./sympy/physics/quantum/identitysearch.py:574:    >>> generate_equivalent_ids(x*x, return_as_muls=True)
+./sympy/physics/quantum/identitysearch.py:577:    >>> generate_equivalent_ids(x*y*z, return_as_muls=True)
+./sympy/physics/quantum/identitysearch.py:590:    # A set of equivalent gate identities
+./sympy/physics/quantum/identitysearch.py:634:    >>> an_identity.equivalent_ids
+./sympy/physics/quantum/identitysearch.py:644:        obj._eq_ids = generate_equivalent_ids(args)
+./sympy/physics/quantum/identitysearch.py:657:    def equivalent_ids(self):
+./sympy/physics/quantum/identitysearch.py:703:        if (gate_identity in an_id.equivalent_ids):
+./sympy/physics/quantum/identitysearch.py:751:        # If a circuit as a matrix is equivalent to a scalar value
+./sympy/physics/quantum/tensorproduct.py:316:    # TODO: This only works for the equivalent of single Qbit gates.
+./sympy/physics/quantum/qubit.py:674:    A oneshot measurement is equivalent to performing a measurement on a
+./sympy/physics/quantum/qubit.py:773:    A oneshot measurement is equivalent to performing a measurement on a
+./sympy/physics/quantum/spin.py:1260:    the state. Note that the state in the product basis is the equivalent of the
+./sympy/physics/quantum/dagger.py:18:    operation is equivalent to transpose and complex conjugate [2]_.
+./sympy/physics/tests/test_secondquant.py:614:        # permut v and t <=> swapping internal lines, equivalent
+./sympy/physics/tests/test_secondquant.py:638:        # permut t <=> swapping external lines, not equivalent
+./sympy/physics/tests/test_secondquant.py:649:        # permut v <=> swapping external lines, not equivalent
+./sympy/physics/tests/test_secondquant.py:666:        # permut t and v <=> swapping internal lines, equivalent.
+./sympy/physics/tests/test_secondquant.py:686:def test_equivalent_internal_lines_VT1T1():
+./sympy/physics/tests/test_secondquant.py:694:    exprs = [  # permute v.  Different dummy order. Not equivalent.
+./sympy/physics/tests/test_secondquant.py:711:    exprs = [  # permute t.  Same dummy order, not equivalent.
+./sympy/physics/tests/test_secondquant.py:719:    exprs = [  # permute v and t.  Different dummy order, equivalent
+./sympy/physics/tests/test_secondquant.py:730:def test_equivalent_internal_lines_VT2conjT2():
+./sympy/physics/tests/test_secondquant.py:780:def test_equivalent_internal_lines_VT2conjT2_ambiguous_order():
+./sympy/physics/tests/test_secondquant.py:813:def test_equivalent_internal_lines_VT2():
+./sympy/physics/tests/test_secondquant.py:821:        # permute v. Same dummy order, not equivalent.
+./sympy/physics/tests/test_secondquant.py:851:    exprs = [  # permute v and t.  Relabelling of dummies should be equivalent.
+./sympy/physics/tests/test_secondquant.py:1041:        # permut v and t <=> swapping internal lines, equivalent
+./sympy/physics/tests/test_secondquant.py:1059:    # non-equivalent substitutions (change of sign)
+./sympy/physics/tests/test_secondquant.py:1069:    # equivalent substitutions
+./sympy/physics/tests/test_secondquant.py:1079:def test_equivalent_internal_lines_VT1T1_AT():
+./sympy/physics/tests/test_secondquant.py:1083:    exprs = [  # permute v.  Different dummy order. Not equivalent.
+./sympy/physics/tests/test_secondquant.py:1098:    exprs = [  # permute t.  Same dummy order, not equivalent.
+./sympy/physics/tests/test_secondquant.py:1105:    exprs = [  # permute v and t.  Different dummy order, equivalent
+./sympy/physics/tests/test_secondquant.py:1115:def test_equivalent_internal_lines_VT2conjT2_AT():
+./sympy/physics/tests/test_secondquant.py:1157:def test_equivalent_internal_lines_VT2conjT2_ambiguous_order_AT():
+./sympy/physics/tests/test_secondquant.py:1184:def test_equivalent_internal_lines_VT2_AT():
+./sympy/physics/tests/test_secondquant.py:1189:        # permute v. Same dummy order, not equivalent.
+./sympy/physics/tests/test_secondquant.py:1206:    exprs = [  # permute v and t.  Relabelling of dummies should be equivalent.
+./sympy/physics/mechanics/joint.py:1790:        ``'123'`` and integer ``123`` are equivalent, for example. Required for
+./sympy/physics/vector/frame.py:728:        This is equivalent to using ``orient_axis()``:
+./sympy/physics/vector/frame.py:883:        ``B.y``, and finally through ``q3`` about ``B.x``. It is equivalent to
+./sympy/physics/vector/frame.py:972:        is equivalent to:
+./sympy/physics/vector/frame.py:1153:            ``'123'`` and integer ``123`` are equivalent, for example. Required
+./sympy/physics/vector/frame.py:1232:            ``'123'`` and integer ``123`` are equivalent, for example. Required
+./sympy/physics/vector/dyadic.py:20:    the resulting matrix is equivalent to the inertia tensor.
+./sympy/physics/vector/printing.py:178:    :func:`~.sstr`, and is equivalent to ``print(sstr(foo))``.
+./sympy/physics/vector/vector.py:126:        equality test; False does not always mean they are not equivalent
+./sympy/physics/vector/vector.py:563:        Returns a Vector equivalent to this one, expressed in otherframe.
+./sympy/physics/control/control_plots.py:101:    system = system.doit()  # Get the equivalent TransferFunction object.
+./sympy/physics/control/control_plots.py:150:        the equivalent matplotlib ``plot`` object will be returned.
+./sympy/physics/control/control_plots.py:299:        the equivalent matplotlib ``plot`` object will be returned.
+./sympy/physics/control/control_plots.py:450:        the equivalent matplotlib ``plot`` object will be returned.
+./sympy/physics/control/control_plots.py:614:        the equivalent matplotlib ``plot`` object will be returned.
+./sympy/physics/control/control_plots.py:913:        the equivalent matplotlib ``plot`` object will be returned.
+./sympy/physics/control/lti.py:157:    equivalent variable $t$, in the time domain. Transfer functions are sometimes also referred to as the Laplace
+./sympy/physics/control/lti.py:809:        When passed ``True``, returns the equivalent
+./sympy/physics/control/lti.py:975:        """Returns the equivalent ``Expr`` object."""
+./sympy/physics/control/lti.py:1069:        When passed ``True``, returns the equivalent
+./sympy/physics/control/lti.py:1114:    >>> pprint(_, use_unicode=False)  # (2 Inputs -A-> 2 Outputs) -> (2 Inputs -B-> 1 Output) -> (1 Input -C-> 2 Outputs) is equivalent to (2 Inputs -Series Equivalent-> 2 Outputs).
+./sympy/physics/control/lti.py:1132:    ``MIMOSeries(A, B)`` is not equivalent to ``A*B``. It is always in the reverse order, that is ``B*A``.
+./sympy/physics/control/lti.py:1186:        """Returns the shape of the equivalent MIMO system."""
+./sympy/physics/control/lti.py:1266:        When passed ``True``, returns the equivalent
+./sympy/physics/control/lti.py:1409:        """Returns the equivalent ``Expr`` object."""
+./sympy/physics/control/lti.py:1498:        When passed ``True``, returns the equivalent
+./sympy/physics/control/lti.py:1616:        """Returns the shape of the equivalent MIMO system."""
+./sympy/physics/control/lti.py:1773:            raise ValueError("The equivalent system will have zero denominator.")
+./sympy/physics/control/lti.py:1989:        When the equivalent MIMO system is not invertible.
+./sympy/physics/control/lti.py:2015:    To get the equivalent system matrix, use either ``doit`` or ``rewrite`` method.
+./sympy/physics/units/dimensions.py:210:        # subtraction is equivalent to addition when the operation is legal
+./sympy/physics/units/dimensions.py:215:        # subtraction is equivalent to addition when the operation is legal
+./sympy/physics/units/dimensions.py:387:            raise TypeError("Only equivalent dimensions can be added or subtracted.")
+./sympy/physics/units/dimensions.py:428:    def equivalent_dims(self, dim1, dim2):
+./sympy/physics/units/tests/test_dimensions.py:128:    assert dimsys_SI.equivalent_dims(c_dim, length)
+./sympy/physics/units/util.py:133:    """Return an equivalent expression in which prefixes are replaced
+./sympy/physics/units/util.py:173:        # quantity that is equivalent to the original expression
+./sympy/physics/units/systems/si.py:336:        # XXX: equivalent_dims is an instance method taking two arguments in
+./sympy/physics/units/systems/si.py:338:        if not DimensionSystem.equivalent_dims(_dimension, Dimension(dimex)):  # type: ignore
+./sympy/physics/hep/tests/test_gamma_matrices.py:163:    # Kahane's algorithm yields this result, which is equivalent to `result1`
+./sympy/physics/secondquant.py:1842:    If you want to generate a normal ordered equivalent of an expression, you
+./sympy/physics/secondquant.py:2427:    Since a, b, c and d are equivalent summation indices, the expression can be
+./sympy/physics/secondquant.py:2584:    consistently across terms with the result that equivalent terms can be
+./sympy/physics/secondquant.py:2587:    It is not possible to determine if two terms are equivalent based solely on
+./sympy/physics/secondquant.py:2589:    dummies should lead to trivially (non-)equivalent terms, thereby revealing
+./sympy/physics/secondquant.py:2872:    Returns the normal ordered equivalent of an expression using Wicks Theorem.
+./sympy/assumptions/predicates/sets.py:146:        ``Q.nonpositive`` and ``Q.noninteger``) are not equivalent to
+./sympy/assumptions/predicates/order.py:21:        negative, i.e., ``Q.nonnegative(x)`` is logically equivalent to
+./sympy/assumptions/predicates/order.py:64:        negative, i.e., ``Q.nonnegative(x)`` is logically equivalent to
+./sympy/assumptions/predicates/order.py:105:    - ``Q.nonzero`` is logically equivalent to ``Q.positive | Q.negative``.
+./sympy/assumptions/predicates/order.py:185:        positive, i.e., ``Q.nonpositive(x)`` is logically equivalent to
+./sympy/assumptions/predicates/order.py:229:        positive, i.e., ``Q.nonpositive(x)`` is logically equivalent to
+./sympy/assumptions/relation/binrel.py:98:        # equivalent arguements with different structures.
+./sympy/simplify/trigsimp.py:45:    guaranteed to be an equivalent polynomial of minimal degree.
+./sympy/simplify/trigsimp.py:135:    # modulo a prime ideal. "Simplify" mainly means finding an equivalent
+./sympy/simplify/tests/test_trigsimp.py:437:    # at Line 576 (in different variables) was formerly the equivalent and
+./sympy/simplify/simplify.py:283:       integer sequences which have equivalent representation in terms
+./sympy/simplify/simplify.py:1124:    right inverse; thus, the result will in general not be equivalent
+./sympy/simplify/simplify.py:1216:    their polar equivalents) in front of the argument. Then, functions of
+./sympy/simplify/simplify.py:1385:    if ``rational=True``, then replace Floats with their Rational equivalents. If
+./sympy/simplify/cse_main.py:437:                # do not compare equal to the evaluated equivalent. So
+./sympy/external/gmpy.py:24:    # MPQ is either gmpy.mpq or the Python equivalent from
+./sympy/parsing/tests/test_autolev.py:149:    # equivalent SymPy physics vector expressions. Would be nice to automate
+./sympy/parsing/sympy_parser.py:586:    """Substitutes "lambda" with its SymPy equivalent Lambda().
+./sympy/parsing/sympy_parser.py:757:    Converts numeric literals to use SymPy equivalents.
+./sympy/parsing/sympy_parser.py:934:        convert numeric literals into their SymPy equivalents, convert
+./sympy/parsing/sympy_parser.py:1092:    Replaces operators with the SymPy equivalent and sets evaluate=False.
+./sympy/parsing/mathematica.py:71:    If the translation into equivalent SymPy expressions fails, an SymPy
+./sympy/parsing/mathematica.py:72:    expression equivalent to Wolfram Mathematica's "FullForm" will be created:
+./sympy/parsing/mathematica.py:120:        syntax tree of nested lists and strings, equivalent to Mathematica's
+./sympy/parsing/mathematica.py:124:        and the nodes with equivalent classes in SymPy are replaced. Unknown
+./sympy/parsing/mathematica.py:904:                # equivalent to `Lambda(d_, d_)(x)` in SymPy). In this case the
+./sympy/parsing/autolev/_listener_autolev_antlr.py:473:            self.kd_equivalents = collections.OrderedDict()
+./sympy/parsing/autolev/_listener_autolev_antlr.py:474:            self.kd_equivalents2 = collections.OrderedDict()
+./sympy/parsing/autolev/_listener_autolev_antlr.py:718:            # of the function D(E, y) with the SymPy equivalent in exitFunction().
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1148:                    if self.kd_equivalents2:
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1149:                        speeds.append(self.kd_equivalents2[self.symbol_table[ch.expr(i).getText().lower()]])
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1211:                                        self.kd_equivalents.update({name: self.symbol_table[i.lower()]})
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1214:                                        self.kd_equivalents.update({name: self.symbol_table[i.lower()]})
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1216:                        for i in self.kd_equivalents.keys():
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1217:                            self.kd_eqs.append(self.kd_equivalents[i] + "-" + i)
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1231:                self.u_dep[:] = [i for i in self.u_dep if i not in self.kd_equivalents.values()]
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1402:                    self.kd_equivalents.update({self.symbol_table[a]:
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1404:                    self.kd_equivalents2.update({self.symbol_table[b]:
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1681:                            elif self.kd_equivalents[i] in self.inputs.keys():
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1682:                                if type(self.inputs[self.kd_equivalents[i]]) is tuple:
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1683:                                    x0.append(i + ":" + self.inputs[self.kd_equivalents[i]][0])
+./sympy/parsing/autolev/_listener_autolev_antlr.py:1685:                                    x0.append(i + ":" + self.inputs[self.kd_equivalents[i]])
+./sympy/plotting/pygletplot/plot.py:170:        ...is equivalent to...
+./sympy/plotting/plot.py:1739:        required. The keys in the dictionary should be equivalent
+./sympy/plotting/plot.py:1745:        The keys in the dictionary should be equivalent to the arguments
+./sympy/plotting/plot.py:1752:        equivalent to the arguments of the :external:mod:`matplotlib`'s
+./sympy/plotting/plot.py:1757:        the plot. The keys in the dictionary should be equivalent to the
+./sympy/matrices/expressions/tests/test_derivatives.py:315:    # Warning: result in the cookbook is equivalent if B and C are symmetric:
+./sympy/matrices/expressions/tests/test_derivatives.py:324:    # Warning: result in the cookbook is equivalent if B and C are symmetric:
+./sympy/matrices/expressions/diagonal.py:88:    is equivalent to the diagonal of `M`, represented as
+./sympy/matrices/tests/test_reductions.py:125:    # must be row-equivalent to the original matrix
+./sympy/matrices/decompositions.py:65:    Obtaining `F`, an RREF of `A`, is equivalent to creating a
+./sympy/matrices/decompositions.py:72:    permutation matrices equivalent to each row-reduction step.
+./sympy/matrices/decompositions.py:613:        equivalent.
+./sympy/matrices/decompositions.py:708:        equivalent.
+./sympy/matrices/repmatrix.py:40:    # or EXRAW. The EXRAW domain is equivalent to the previous implementation
+./sympy/matrices/repmatrix.py:277:        trying to prove that the elements are equivalent, returning True
+./sympy/matrices/repmatrix.py:280:        be decided if the expressions are equivalent or not. This is, in
+./sympy/matrices/dense.py:687:    # Note that ``Random()`` is equivalent to ``Random(None)``
+./sympy/matrices/reductions.py:148:    """Returns a matrix row-equivalent to ``M`` that is in echelon form. Note
+./sympy/matrices/determinant.py:146:    pivot_val and col[pivot_index] are equivalent, but will be different
+./sympy/ntheory/factor_.py:1310:            # "close enough." This is the big root equivalent of dividing by
+./sympy/ntheory/continued_fraction.py:192:    terminating continued fractions, this is equivalent to
+./isympy.py:15:So starting 'isympy' is equivalent to starting Python (or IPython) and
+./isympy.py:90:    equivalent to -c python -p no.
+./isympy.py:98:    This is equivalent to setting the environment variable
+./isympy.py:142:    This is equivalent to --auto-symbols --int-to-Integer.  Future options
+./isympy.py:276:        help="equivalent to -a -i")
+./.ci/durations.json:1520:            "test_equivalent_internal_lines_VT1T1",
+./.ci/durations.json:1521:            "test_equivalent_internal_lines_VT1T1_AT",
+./.ci/durations.json:1522:            "test_equivalent_internal_lines_VT2",
+./.ci/durations.json:1523:            "test_equivalent_internal_lines_VT2_AT",
+./.ci/durations.json:1524:            "test_equivalent_internal_lines_VT2conjT2",
+./.ci/durations.json:1525:            "test_equivalent_internal_lines_VT2conjT2_AT",
+./.ci/durations.json:1526:            "test_equivalent_internal_lines_VT2conjT2_ambiguous_order",
+./.ci/durations.json:1527:            "test_equivalent_internal_lines_VT2conjT2_ambiguous_order_AT",
+./examples/advanced/gibbs_phenomenon.py:134:    # next 2 lines equivalent to L = l2_gram_schmidt(L, (x, -pi, pi)), but faster:
+./examples/notebooks/Macaulay_resultant.ipynb:309:    "Each list is being multiplied by polynomials $f_1$, $f_2$ and $f_3$ equivalently. Then we fill the matrix\n",
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I will open the relevant portion of dimensions.py around the equivalent_dims implementation to see how to call it from unitsystem._collect_factor_and_dimension.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sympy/physics/units/dimensions.py
+----ARG----
+start_line
+420
+----ARG----
+end_line
+500
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+   420          raise TypeError("Type {} not implemented for get_dimensional_dependencies".format(type(dimension.name)))
+        
+   421      def get_dimensional_dependencies(self, name, mark_dimensionless=False):
+   422          dimdep = self._get_dimensional_dependencies_for_name(name)
+   423          if mark_dimensionless and dimdep == {}:
+   424              return {Dimension(1): 1}
+   425          return {k: v for k, v in dimdep.items()}
+        
+   426      def equivalent_dims(self, dim1, dim2):
+   427          deps1 = self.get_dimensional_dependencies(dim1)
+   428          deps2 = self.get_dimensional_dependencies(dim2)
+   429          return deps1 == deps2
+        
+   430      def extend(self, new_base_dims, new_derived_dims=(), new_dim_deps=None):
+   431          deps = dict(self.dimensional_dependencies)
+   432          if new_dim_deps:
+   433              deps.update(new_dim_deps)
+        
+   434          new_dim_sys = DimensionSystem(
+   435              tuple(self.base_dims) + tuple(new_base_dims),
+   436              tuple(self.derived_dims) + tuple(new_derived_dims),
+   437              deps
+   438          )
+   439          new_dim_sys._quantity_dimension_map.update(self._quantity_dimension_map)
+   440          new_dim_sys._quantity_scale_factors.update(self._quantity_scale_factors)
+   441          return new_dim_sys
+        
+   442      def is_dimensionless(self, dimension):
+   443          """
+   444          Check if the dimension object really has a dimension.
+        
+   445          A dimension should have at least one component with non-zero power.
+   446          """
+   447          if dimension.name == 1:
+   448              return True
+   449          return self.get_dimensional_dependencies(dimension) == {}
+        
+   450      @property
+   451      def list_can_dims(self):
+   452          """
+   453          Useless method, kept for compatibility with previous versions.
+        
+   454          DO NOT USE.
+        
+   455          List all canonical dimension names.
+   456          """
+   457          dimset = set()
+   458          for i in self.base_dims:
+   459              dimset.update(set(self.get_dimensional_dependencies(i).keys()))
+   460          return tuple(sorted(dimset, key=str))
+        
+   461      @property
+   462      def inv_can_transf_matrix(self):
+   463          """
+   464          Useless method, kept for compatibility with previous versions.
+        
+   465          DO NOT USE.
+        
+   466          Compute the inverse transformation matrix from the base to the
+   467          canonical dimension basis.
+        
+   468          It corresponds to the matrix where columns are the vector of base
+   469          dimensions in canonical basis.
+        
+   470          This matrix will almost never be used because dimensions are always
+   471          defined with respect to the canonical basis, so no work has to be done
+   472          to get them in this basis. Nonetheless if this matrix is not square
+   473          (or not invertible) it means that we have chosen a bad basis.
+   474          """
+   475          matrix = reduce(lambda x, y: x.row_join(y),
+   476                          [self.dim_can_vector(d) for d in self.base_dims])
+   477          return matrix
+        
+   478      @property
+   479      def can_transf_matrix(self):
+   480          """
+   481          Useless method, kept for compatibility with previous versions.
+        
+   482          DO NOT USE.
+        
+   483          Return the canonical transformation matrix from the canonical to the
+
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+I'll re-open the Add branch in unitsystem.py (the exact lines to be edited) with whitespace highlighted so I can make a minimal, correctly-indented change. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sympy/physics/units/unitsystem.py
+----ARG----
+start_line
+136
+----ARG----
+end_line
+150
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···136          elif isinstance(expr, Add):
+···137              return self.get_dimensional_expr(expr.args[0])
+···138          elif isinstance(expr, Derivative):
+···139              dim = self.get_dimensional_expr(expr.expr)
+···140              for independent, count in expr.variable_count:
+···141                  dim /= self.get_dimensional_expr(independent)**count
+···142              return dim
+···143          elif isinstance(expr, Function):
+···144              args = [self.get_dimensional_expr(arg) for arg in expr.args]
+···145              if all(i == 1 for i in args):
+···146                  return S.One
+···147              return expr.func(*args)
+···148          elif isinstance(expr, Quantity):
+···149              return self.get_quantity_dimension(expr).name
+···150          return S.One
+
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I'll make a minimal one-line change: replace the direct equality check with a DimensionSystem equivalence check so equivalent dimensions are accepted when adding.  
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+sympy/physics/units/unitsystem.py
+----ARG----
+old_text
+if dim != addend_dim:
+----ARG----
+new_text
+if not self.get_dimension_system().equivalent_dims(dim, addend_dim):
+----ARG----
+count
+1
+----END_FUNCTION_CALL----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+Error: Invalid count. count=1
+----END_FUNCTION_CALL. It must be a valid integer.
+
+----------------------------
+|MESSAGE(role="assistant", id=23)|
+I will replace the direct equality check with a call to the dimension system's equivalent_dims so equivalent dimensions are accepted when adding.  
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+sympy/physics/units/unitsystem.py
+----ARG----
+old_text
+if dim != addend_dim:
+----ARG----
+new_text
+if not self.get_dimension_system().equivalent_dims(dim, addend_dim):
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=24)|
+✓ Successfully replaced 1 occurrence(s) in sympy/physics/units/unitsystem.py.
+Found 1 total occurrence(s) of the text.
+TIP: Call show_file to verify the change was correct.
+
+----------------------------
+|MESSAGE(role="assistant", id=25)|
+I'll verify the replacement by showing the edited region with whitespace highlighted to confirm indentation and the new equivalence check.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sympy/physics/units/unitsystem.py
+----ARG----
+start_line
+139
+----ARG----
+end_line
+150
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=26)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···139              dim = self.get_dimensional_expr(expr.expr)
+···140              for independent, count in expr.variable_count:
+···141                  dim /= self.get_dimensional_expr(independent)**count
+···142              return dim
+···143          elif isinstance(expr, Function):
+···144              args = [self.get_dimensional_expr(arg) for arg in expr.args]
+···145              if all(i == 1 for i in args):
+···146                  return S.One
+···147              return expr.func(*args)
+···148          elif isinstance(expr, Quantity):
+···149              return self.get_quantity_dimension(expr).name
+···150          return S.One
+
+
+----------------------------
+|MESSAGE(role="assistant", id=27)|
+I will search the repository for uses of equivalent_dims to confirm the replacement location and ensure the Add-branch now calls the dimension-system equivalence check.  
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+equivalent_dims(
+----ARG----
+directory
+.
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=28)|
+./sympy/physics/units/dimensions.py:428:    def equivalent_dims(self, dim1, dim2):
+./sympy/physics/units/tests/test_dimensions.py:128:    assert dimsys_SI.equivalent_dims(c_dim, length)
+./sympy/physics/units/unitsystem.py:178:                if not self.get_dimension_system().equivalent_dims(dim, addend_dim):
+./sympy/physics/units/systems/si.py:338:        if not DimensionSystem.equivalent_dims(_dimension, Dimension(dimex)):  # type: ignore
+./doc/src/modules/physics/units/examples.rst:54:    >>> dimsys_SI.equivalent_dims(F, force)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=29)|
+I'll display the surrounding lines (160–190) of unitsystem.py with whitespace highlighted to verify the replacement and indentation.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+sympy/physics/units/unitsystem.py
+----ARG----
+start_line
+160
+----ARG----
+end_line
+190
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=30)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···160              factor = 1
+···161              dimension = Dimension(1)
+···162              for arg in expr.args:
+···163                  arg_factor, arg_dim = self._collect_factor_and_dimension(arg)
+···164                  factor *= arg_factor
+···165                  dimension *= arg_dim
+···166              return factor, dimension
+···167          elif isinstance(expr, Pow):
+···168              factor, dim = self._collect_factor_and_dimension(expr.base)
+···169              exp_factor, exp_dim = self._collect_factor_and_dimension(expr.exp)
+···170              if self.get_dimension_system().is_dimensionless(exp_dim):
+···171                  exp_dim = 1
+···172              return factor ** exp_factor, dim ** (exp_factor * exp_dim)
+···173          elif isinstance(expr, Add):
+···174              factor, dim = self._collect_factor_and_dimension(expr.args[0])
+···175              for addend in expr.args[1:]:
+···176                  addend_factor, addend_dim = \
+···177                      self._collect_factor_and_dimension(addend)
+···178                  if not self.get_dimension_system().equivalent_dims(dim, addend_dim):
+···179                      raise ValueError(
+···180                          'Dimension of "{}" is {}, '
+···181                          'but it should be {}'.format(
+···182                              addend, addend_dim, dim))
+···183                  factor += addend_factor
+···184              return factor, dim
+···185          elif isinstance(expr, Derivative):
+···186              factor, dim = self._collect_factor_and_dimension(expr.args[0])
+···187              for independent, count in expr.variable_count:
+···188                  ifactor, idim = self._collect_factor_and_dimension(independent)
+···189                  factor /= ifactor**count
+···190                  dim /= idim**count
+
+
+----------------------------
+|MESSAGE(role="assistant", id=31)|
+The change is ready; I'll run the repository verification step (syntax, diffs, and checks) to ensure the minimal edit passes all checks.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=32)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 1
+   Lines deleted: 1
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/sympy/physics/units/unitsystem.py b/sympy/physics/units/unitsystem.py
+index a436880c4b..5705c821c2 100644
+--- a/sympy/physics/units/unitsystem.py
++++ b/sympy/physics/units/unitsystem.py
+@@ -175,7 +175,7 @@ def _collect_factor_and_dimension(self, expr):
+             for addend in expr.args[1:]:
+                 addend_factor, addend_dim = \
+                     self._collect_factor_and_dimension(addend)
+-                if dim != addend_dim:
++                if not self.get_dimension_system().equivalent_dims(dim, addend_dim):
+                     raise ValueError(
+                         'Dimension of "{}" is {}, '
+                         'but it should be {}'.format(
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+
