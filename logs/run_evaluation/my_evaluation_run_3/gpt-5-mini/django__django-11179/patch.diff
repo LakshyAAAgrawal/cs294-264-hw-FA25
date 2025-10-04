@@ -1,0 +1,33 @@
+diff --git a/django/db/models/deletion.py b/django/db/models/deletion.py
+index 92fe4affb9..f96c49bb80 100644
+--- a/django/db/models/deletion.py
++++ b/django/db/models/deletion.py
+@@ -271,14 +271,20 @@ class Collector:
+         # number of objects deleted for each model label
+         deleted_counter = Counter()
+ 
+-        # Optimize for the case with a single obj and no dependencies
+-        if len(self.data) == 1 and len(instances) == 1:
+-            instance = list(instances)[0]
+-            if self.can_fast_delete(instance):
+-                with transaction.mark_for_rollback_on_error():
+-                    count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
+-                return count, {model._meta.label: count}
+-
++# Optimize for the case with a single obj and no dependencies
++        if len(self.data) == 1:
++            model, instances = next(iter(self.data.items()))
++            if len(instances) == 1:
++                instance = instances[0]
++                if self.can_fast_delete(instance):
++                    with transaction.mark_for_rollback_on_error():
++                        count = sql.DeleteQuery(model).delete_batch([instance.pk], self.using)
++                    # Clear PK on the instance to reflect that it was deleted.
++                    setattr(instance, model._meta.pk.attname, None)
++                    # Send post_delete signal for non-auto-created models.
++                    if not model._meta.auto_created:
++                        signals.post_delete.send(sender=model, instance=instance, using=self.using)
++                    return count, {model._meta.label: count}
+         with transaction.atomic(using=self.using, savepoint=False):
+             # send pre_delete signals
+             for model, obj in self.instances_with_model():
