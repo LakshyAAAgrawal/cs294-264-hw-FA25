@@ -1,0 +1,31 @@
+I inspected the code in this checkout and confirmed the behavior you observed.
+
+Evidence:
+- django/core/signing.py
+  - get_cookie_signer() constructs a Signer with key=_cookie_signer_key(settings.SECRET_KEY) and fallback_keys=map(_cookie_signer_key, settings.SECRET_KEY_FALLBACKS). Signer.unsign tries the primary key then each fallback. (Signer uses fallback_keys for cookie/signing operations.)
+- django/contrib/auth/tokens.py
+  - PasswordResetTokenGenerator exposes secret and secret_fallbacks and, when checking a token, iterates over [self.secret, *self.secret_fallbacks] so password-reset tokens honor SECRET_KEY_FALLBACKS.
+- django/contrib/auth/base_user.py
+  - AbstractBaseUser.get_session_auth_hash() calls salted_hmac(key_salt, self.password, algorithm="sha256") with no secret argument. salted_hmac defaults secret to settings.SECRET_KEY, so it does NOT consult SECRET_KEY_FALLBACKS; therefore existing sessions signed with an old secret will fail verification.
+
+Conclusion and recommended actions:
+- The docs wording is misleading: SECRET_KEY_FALLBACKS does apply to Signer-based signing (cookies, signing.dumps/loads) and to PasswordResetTokenGenerator (which explicitly supports fallbacks), but it does not affect AbstractBaseUser.get_session_auth_hash() or the session verification path in this version of the code.
+- Two practical fixes:
+  1. Documentation fix: clarify that SECRET_KEY_FALLBACKS does not cover get_session_auth_hash()/session verification in older Django versions and explain the migration impact (active sessions will be invalidated unless you take compatibility steps).
+  2. Code fix (two approaches, choose one):
+     - Preferable: update django/contrib/auth to attempt fallback session hashes when verifying sessions (the newer Django sources show exactly this approach — try the current hash, then try fallbacks and, on success, rotate the session and write the new hash). This keeps existing sessions working across rotation.
+     - Alternative: add a public API on user objects (e.g. get_session_auth_fallback_hashes()) and iterate over SECRET_KEY_FALLBACKS to compute fallback hashes during verification, then update sessions on successful fallback verification.
+
+If you want, I can:
+- Draft the minimal doc change to make the behavior explicit, and/or
+- Prepare a small code patch that updates the session verification in django/contrib/auth to try fallback hashes (I can implement the fallback check similar to PasswordResetTokenGenerator or to newer Django versions' approach).
+
+Files referenced:
+- django/core/signing.py (Signer, get_cookie_signer)
+- django/utils/crypto.py (salted_hmac default secret behavior)
+- django/contrib/auth/base_user.py (get_session_auth_hash)
+- django/contrib/auth/tokens.py (PasswordResetTokenGenerator secret_fallbacks)
+
+Next step: tell me whether you want a docs change, a code patch to accept fallback session hashes, or both and I will prepare the patch.
+
+No changes detected to generate a patch.

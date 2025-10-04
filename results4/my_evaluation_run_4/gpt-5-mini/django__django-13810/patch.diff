@@ -1,0 +1,24 @@
+Cause: BaseHandler.adapt_method_mode is called before middleware instantiation, so when a middleware's __init__ raises MiddlewareNotUsed the already-adapted handler (wrapped for sync/async) replaces the chain and can cause subsequent middlewares to be run with the wrong mode.
+
+Short-term mitigations:
+- For application middleware: make it async-capable (set async_capable = True or return async-compatible callables) or avoid raising MiddlewareNotUsed from __init__ (raise earlier in config-time code). If you intend the middleware to be sync-only, implement async wrappers (or set sync_capable/async_capable appropriately) so adapt_method_mode doesn't incorrectly wrap the handler.
+- For debugging: comment out middlewares or run under WSGI to avoid ASGI-specific wrapping side-effects while reproducing.
+
+Long-term/Django-core recommendation:
+- Change BaseHandler.load_middleware so middleware(handler) is called before adapting the handler: instantiate the middleware first, catch MiddlewareNotUsed, and only adapt the handler after a successful instantiation. This prevents an initialization-time MiddlewareNotUsed from mutating the handler used by later middlewares.
+- Update docs to explicitly warn that raising MiddlewareNotUsed from __init__ may have unintended effects under ASGI unless middleware is async-capable, or clarify that middleware factories are expected to be side-effect-free with regard to handler adaptation.
+
+Suggested minimal patch (conceptual):
+- Move the call to adapt_method_mode that wraps the handler to after creating mw_instance:
+    mw_instance = middleware(handler)
+    # If instantiation succeeded:
+    handler = self.adapt_method_mode(middleware_is_async, mw_instance, middleware_is_async)
+    handler_is_async = middleware_is_async
+
+Notes:
+- This is a behavioral change and should include tests ensuring MiddlewareNotUsed from __init__ leaves handler unchanged.
+- As an immediate workaround in userland, adjust the middleware to raise MiddlewareNotUsed at import/config time or make it async-capable.
+
+Summary: your analysis is right; either make the middleware async-capable or change Django to adapt handlers only after successful middleware instantiation to avoid "poisoning" the middleware chain.
+
+No changes detected to generate a patch.
