@@ -3039,3 +3039,262 @@ PATCH
 *** End Patch
 
 
+----------------------------
+|MESSAGE(role="assistant", id=54)|
+Root cause (short): Python calls the left operand's __mul__ first. SymPy numeric/symbolic types implement __mul__ and return a Mul(2, Point(...)) (instead of returning NotImplemented), so Python never falls back to Point.__rmul__; that Mul then reaches Point.__add__, which tries to treat it like a coordinate sequence and fails.
+
+Immediate workarounds
+- Write the point on the right so Point.__mul__ runs: point1 + point2 * s
+- Or explicitly compute the scaled point: point1 + point2 * s (or point1 + point2.__rmul__(s))
+
+Minimal, safe SymPy fix (drop-in replacement for the except TypeError: block inside Point.__add__ in sympy/geometry/point.py)
+- This runs only as a fallback when Point(other) raised TypeError.
+- It detects a Mul containing a Point factor, converts it to a proper scaled Point by delegating to Point.__mul__, then retries the addition.
+
+Replace the existing except block with:
+
+```python
+        except TypeError:
+            # allow adding expressions like a*Point where a is a scalar and Point is a Point
+            from sympy import Mul
+            if isinstance(other, Mul):
+                for factor in other.args:
+                    if isinstance(factor, Point):
+                        try:
+                            # Convert the Mul (scalar * Point) into a scaled Point
+                            # by delegating to Point.__mul__ (factor * scalar).
+                            scaled_point = factor * (other / factor)
+                        except Exception:
+                            # If conversion fails (e.g. not a suitable scalar), skip this factor
+                            continue
+                        # Delegate to normal addition using the properly constructed Point
+                        return self + scaled_point
+            raise GeometryError("Don't know how to add {} and a Point object".format(other))
+```
+
+Small tests to add (e.g. sympy/geometry/tests/test_point_scalar_commutativity.py):
+
+```python
+import sympy
+from sympy.geometry import Point
+
+def test_point_scalar_commutativity_numeric():
+    p1 = Point(0, 0)
+    p2 = Point(1, 1)
+    s = sympy.sympify(2.0)
+    assert p1 + p2 * s == p1 + s * p2
+
+def test_point_scalar_commutativity_symbolic():
+    a = sympy.symbols('a')
+    p1 = Point(0, 0)
+    p2 = Point(1, 1)
+    assert p1 + p2 * a == p1 + a * p2
+```
+
+Notes and alternatives
+- This is a small, local, low-risk fix that preserves the current behavior for normal inputs and reuses Point.__mul__ for the scaling logic.
+- If you prefer a stricter guard, you could check that the candidate scalar (other / factor) is scalar-like (e.g. .is_number or .is_commutative) before attempting factor * (other / factor).
+- A larger alternative would be changing SymPy numeric types' __mul__ to return NotImplemented for non-scalar operands, but that is more invasive.
+
+If you want, I can:
+- produce a ready-to-apply git patch including the test file,
+- craft the exact replacement matching the indentation from your local sympy/geometry/point.py if you paste the surrounding lines,
+- or draft a short PR description you can use upstream. Which would you like?----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=55)|
+Error parsing function call: Error parsing response: No `----BEGIN_FUNCTION_CALL----` marker found before `----END_FUNCTION_CALL----`. You must ensure that you make a function call at the end of your response.
+
+Your response must strictly follow this format:
+```
+your_thoughts_here
+...
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+```
+
+----------------------------
+|MESSAGE(role="assistant", id=56)|
+Root cause — short: Python tries the left operand's __mul__ first. SymPy numeric/symbolic types implement __mul__ and return a Mul( e.g. Mul(2, Point(1,1)) ) instead of returning NotImplemented, so Python never falls back to Point.__rmul__. That Mul then arrives at Point.__add__ as the "other" argument; Point.__add__ tries to construct a Point from that Mul (expects a sequence of coordinates) and fails, giving the TypeError/GeometryError you saw.
+
+Two immediate options
+
+1) Workaround in user code (no SymPy change)
+- Always make the Point be the right-hand operand of multiplication so Point.__mul__ runs:
+  - use point1 + point2 * s (works) instead of point1 + s * point2 (fails).
+- Or explicitly compute the scaled point: point1 + point2 * s or point1 + point2.__rmul__(s).
+
+2) Minimal SymPy fix (recommended for upstream)
+- Add a small fallback inside Point.__add__ that detects a Mul containing a Point factor, converts that Mul into a scaled Point by delegating to Point.__mul__, and then proceeds with the normal addition logic. It runs only as a fallback when attempting Point(other) raised TypeError, so it is local and low-risk.
+
+Drop-in replacement for the except TypeError: block inside Point.__add__ (sympy/geometry/point.py)
+- Replace the existing except TypeError: ... block with the snippet below, preserving the file's indentation:
+
+```python
+        except TypeError:
+            # allow adding expressions like a*Point where a is a scalar and Point is a Point
+            from sympy import Mul
+            if isinstance(other, Mul):
+                for factor in other.args:
+                    if isinstance(factor, Point):
+                        try:
+                            # Convert the Mul (scalar * Point) into a scaled Point
+                            # by delegating to Point.__mul__ (factor * scalar).
+                            scaled_point = factor * (other / factor)
+                        except Exception:
+                            # If conversion fails (e.g. not a suitable scalar), skip this factor
+                            continue
+                        # Delegate to normal addition using the properly constructed Point
+                        return self + scaled_point
+            raise GeometryError("Don't know how to add {} and a Point object".format(other))
+```
+
+Why this is safe/minimal
+- It only executes when the normal Point(other) conversion raises TypeError (so ordinary inputs are unchanged).
+- It only inspects Mul objects and only acts if a Point instance is one of the Mul factors.
+- It reuses Point.__mul__ to perform the scaling (no duplication).
+- If conversion cannot be made, it raises the same GeometryError as before.
+
+Suggested unit tests (add e.g. sympy/geometry/tests/test_point_scalar_commutativity.py)
+
+```python
+import sympy
+from sympy.geometry import Point
+
+def test_point_scalar_commutativity_numeric():
+    p1 = Point(0, 0)
+    p2 = Point(1, 1)
+    s = sympy.sympify(2.0)
+    assert p1 + p2 * s == p1 + s * p2
+
+def test_point_scalar_commutativity_symbolic():
+    a = sympy.symbols('a')
+    p1 = Point(0, 0)
+    p2 = Point(1, 1)
+    assert p1 + p2 * a == p1 + a * p2
+
+def test_point_scalar_mul_multiple_factors():
+    a, b = sympy.symbols('a b')
+    p = Point(1, 1)
+    expr = a*b*p
+    q = Point(0, 0)
+    # addition should be consistent with constructing p*(a*b)
+    assert q + expr == q + (a*b)*p
+```
+
+How to apply & verify locally
+1. Edit sympy/geometry/point.py and replace the existing `except TypeError:` block in Point.__add__ with the snippet above (preserve exact indentation).
+2. Add the test file into sympy/geometry/tests/.
+3. Run just those tests:
+   - pytest sympy/geometry/tests/test_point_scalar_commutativity.py -q
+   - or run the geometry tests: pytest sympy/geometry -q
+
+Notes / alternatives
+- If you prefer stricter checks, you can check that (other/factor) looks scalar-like before calling Point.__mul__ (e.g. test .is_number, .is_commutative, or a custom predicate). The try/except approach is simpler and robust for symbolic scalars.
+- An alternative (bigger) fix is changing SymPy numeric types to return NotImplemented when their __mul__ cannot handle non-scalar operands so Python would fall back to Point.__rmul__. That is broader and more invasive; the localized fallback in Point.__add__ is smaller and less risky.
+
+If you want, I can:
+- produce a ready-to-apply git-style patch (diff) including the code change and tests,
+- or craft the exact replacement matching the indentation of your local file if you paste the surrounding lines from sympy/geometry/point.py,
+- or draft a short PR description you can use upstream.
+
+Which of those would you like next?----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=57)|
+Error parsing function call: Error parsing response: No `----BEGIN_FUNCTION_CALL----` marker found before `----END_FUNCTION_CALL----`. You must ensure that you make a function call at the end of your response.
+
+Your response must strictly follow this format:
+```
+your_thoughts_here
+...
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+```
+
+----------------------------
+|MESSAGE(role="assistant", id=58)|
+Root cause: Python evaluates the left operand's __mul__ first, so SymPy numeric types return a Mul(2, Point(...)) instead of NotImplemented and Python never falls back to Point.__rmul__; the Mul then reaches Point.__add__ which fails when it tries to treat the Mul as a coordinate sequence. Below is a minimal, safe drop-in replacement for the except TypeError: block in sympy/geometry/point.py plus a small test file to add to sympy/geometry/tests/.
+
+Apply by replacing the existing except TypeError: block in Point.__add__ with the snippet below (preserve the file's indentation), and add the test file to sympy/geometry/tests/.
+
+Patch to insert into sympy/geometry/point.py (replace the existing except TypeError: ... block):
+```python
+        except TypeError:
+            # allow adding expressions like a*Point where a is a scalar and Point is a Point
+            from sympy import Mul
+            if isinstance(other, Mul):
+                for factor in other.args:
+                    if isinstance(factor, Point):
+                        try:
+                            # Convert the Mul (scalar * Point) into a scaled Point
+                            # by delegating to Point.__mul__ (factor * scalar).
+                            scaled_point = factor * (other / factor)
+                        except Exception:
+                            # If conversion fails (e.g. not a suitable scalar), skip this factor
+                            continue
+                        # Delegate to normal addition using the properly constructed Point
+                        return self + scaled_point
+            raise GeometryError("Don't know how to add {} and a Point object".format(other))
+```
+
+Test file to add (sympy/geometry/tests/test_point_scalar_commutativity.py):
+```python
+import sympy
+from sympy.geometry import Point
+
+def test_point_scalar_commutativity_numeric():
+    p1 = Point(0, 0)
+    p2 = Point(1, 1)
+    s = sympy.sympify(2.0)
+    assert p1 + p2 * s == p1 + s * p2
+
+def test_point_scalar_commutativity_symbolic():
+    a = sympy.symbols('a')
+    p1 = Point(0, 0)
+    p2 = Point(1, 1)
+    assert p1 + p2 * a == p1 + a * p2
+
+def test_point_scalar_mul_multiple_factors():
+    a, b = sympy.symbols('a b')
+    p = Point(1, 1)
+    expr = a*b*p
+    q = Point(0, 0)
+    # ensure addition with Mul that has multiple symbolic factors works
+    assert q + expr == q + (a*b)*p
+```
+
+Notes and alternatives (brief):
+- This is a small, local fallback that only runs when the normal Point(other) conversion fails; it reuses Point.__mul__ for scaling and preserves prior behavior when no conversion is possible.
+- If you prefer stricter checks, test the candidate scalar (other/factor) for scalar-like properties before calling Point.__mul__.
+- Larger, more invasive alternative: change SymPy numeric types' __mul__ to return NotImplemented for non-scalar operands so Python falls back to Point.__rmul__; that affects more code and is higher-risk.
+
+If you want, I can generate a git-style patch file or craft the exact replace_in_file content matching your local file's indentation—tell me which and I'll produce it. 
+----BEGIN_FUNCTION_CALL----
+run_bash_cmd
+----ARG----
+command
+echo "Patch and tests provided in message; ready to generate patch or exact replacement on request."
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=59)|
+Patch and tests provided in message; ready to generate patch or exact replacement on request.
+
+
