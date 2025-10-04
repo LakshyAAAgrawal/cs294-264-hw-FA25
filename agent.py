@@ -161,6 +161,42 @@ After EVERY replace_in_file or find_and_replace_text call:
 NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
 If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
 
+SEMANTIC ERROR PREVENTION (CRITICAL):
+Syntax checks DON'T catch runtime errors! These cause test failures even with valid syntax.
+
+BEFORE deleting or modifying ANY lines, check they don't contain:
+1. ✗ Variable definitions used later
+2. ✗ Import statements needed elsewhere
+3. ✗ Function/class definitions  
+4. ✗ Critical initialization code
+
+If deleting such lines, you MUST replace them inline or the code WILL break at runtime!
+
+EXAMPLE OF DANGEROUS EDIT (causes NameError):
+❌ BAD - Deletes variable definition:
+```python
+  for middleware_path in reversed(settings.MIDDLEWARE):
+-     middleware = import_string(middleware_path)  # ← DELETED!
+-     middleware_can_sync = getattr(middleware, 'sync_capable', True)  # ← DELETED!
+      middleware_can_async = getattr(middleware, 'async_capable', False)  # ← Uses undefined 'middleware'!
+```
+This WILL fail with: NameError: name 'middleware' is not defined
+
+✅ GOOD - Preserves variable definitions:
+```python
+  for middleware_path in reversed(settings.MIDDLEWARE):
+      middleware = import_string(middleware_path)  # ← KEPT
+      middleware_can_sync = getattr(middleware, 'sync_capable', True)  # ← KEPT
+      middleware_can_async = getattr(middleware, 'async_capable', False)  # ← Uses defined variable
+```
+
+MANDATORY CHECKS before editing:
+1. If deleting lines with `= ` (assignments), verify the variable isn't used later
+2. If deleting `import` or `from`, verify nothing uses those imports
+3. If deleting `def` or `class`, verify it's not called elsewhere
+4. After editing, the tool will warn you if you deleted dangerous code patterns
+5. verify_before_finish() now includes semantic analysis to catch these errors
+
 Efficiency tips:
 - Aim for 5–15 steps for most tasks
 - Be concise and act quickly

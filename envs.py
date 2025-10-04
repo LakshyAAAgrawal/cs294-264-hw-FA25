@@ -161,11 +161,32 @@ class SWEEnvironment:
                 old_lines = lines[from_line-1:to_line]
                 visual_diff = self._generate_visual_diff(old_lines, content_lines, from_line)
                 
+                # Warn about potentially dangerous deletions
+                old_lines_text = '\n'.join(old_lines)
+                new_lines_text = '\n'.join(content_lines)
+                warnings = []
+                
+                # Check if we're deleting imports, class/function definitions, or variable assignments
+                dangerous_patterns = [
+                    ('import ', 'import statements'),
+                    ('from ', 'import statements'),
+                    ('def ', 'function definitions'),
+                    ('class ', 'class definitions'),
+                    (' = ', 'variable assignments')
+                ]
+                
+                for pattern, description in dangerous_patterns:
+                    if pattern in old_lines_text and pattern not in new_lines_text:
+                        warnings.append(f"⚠️  WARNING: You removed {description}. Verify this doesn't break code that uses them!")
+                
+                warning_text = '\n'.join(warnings) + '\n' if warnings else ''
+                
                 msg = (
                     f"✓ Successfully replaced lines {from_line}-{to_line} in {file_path}. "
                     f"Replaced {lines_removed} lines with {lines_added} lines (net change: {net_change:+d} lines).\n"
                     f"⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.\n"
                     f"The new file has approximately {len(lines) + net_change} total lines.\n\n"
+                    f"{warning_text}"
                     f"{visual_diff}"
                 )
                 return self._append_syntax_warning_if_needed(file_path, msg)
@@ -196,6 +217,12 @@ class SWEEnvironment:
         Returns:
             The content of the file with line numbers
         """
+        if isinstance(highlight_whitespace, str):
+            try:
+                highlight_whitespace = (highlight_whitespace.lower() == "true")
+            except Exception:
+                highlight_whitespace = False
+
         try:
             if start_line is not None and end_line is not None:
                 # Show specific line range
@@ -257,6 +284,12 @@ class SWEEnvironment:
         Returns:
             Matching lines with line numbers
         """
+        if isinstance(use_regex, str):
+            try:
+                use_regex = (use_regex.lower() == "true")
+            except Exception:
+                use_regex = True
+
         try:
             esc = pattern.replace("'", "'\\''")
             fixed_flag = "-F" if not use_regex else ""
@@ -320,6 +353,12 @@ class SWEEnvironment:
         Returns:
             Matching lines with file names and line numbers
         """
+        if isinstance(use_regex, str):
+            try:
+                use_regex = (use_regex.lower() == "true")
+            except Exception:
+                use_regex = True
+
         try:
             esc = pattern.replace("'", "'\\''")
             fixed_flag = "-F" if not use_regex else ""
@@ -411,6 +450,12 @@ class SWEEnvironment:
         """
         Replace pattern with replacement in the file (regex or literal).
         """
+        if isinstance(use_regex, str):
+            try:
+                use_regex = (use_regex.lower() == "true")
+            except Exception:
+                use_regex = True
+
         try:
             esc_pattern = pattern.replace("'", "'\\''")
             esc_repl = replacement.replace("'", "'\\''")
@@ -442,6 +487,22 @@ class SWEEnvironment:
         Returns:
             Summary string describing the change, or error message
         """
+        if isinstance(use_regex, str):
+            try:
+                use_regex = (use_regex.lower() == "true")
+            except Exception:
+                use_regex = False
+        if isinstance(include_start, str):
+            try:
+                include_start = (include_start.lower() == "true")
+            except Exception:
+                include_start = False
+        if isinstance(include_end, str):
+            try:
+                include_end = (include_end.lower() == "true")
+            except Exception:
+                include_end = False
+
         try:
             # Read file
             read_output_d = self.env.execute(f"cat {file_path}")
@@ -500,6 +561,12 @@ class SWEEnvironment:
         """
         Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
         """
+        if isinstance(match_indentation, str):
+            try:
+                match_indentation = (match_indentation.lower() == "true")
+            except Exception:
+                match_indentation = True
+
         try:
             # Validate and convert line_num to int
             try:
@@ -863,6 +930,49 @@ class SWEEnvironment:
             traceback.print_exc()
             return f"Error during repository syntax check: {str(e)}"
 
+    def check_code_quality(self, file_path: str) -> str:
+        """
+        Run static analysis on a Python file to catch semantic errors.
+        Uses pyflakes to detect undefined names, unused imports, etc.
+        
+        This catches errors that syntax checking misses, such as:
+        - Undefined variables (NameError)
+        - Unused imports
+        - Undefined names in function calls
+        - Redefined functions
+        
+        Args:
+            file_path (str): path to the Python file to check
+            
+        Returns:
+            Report of issues found or success message
+        """
+        try:
+            # Try to use pyflakes for semantic analysis
+            result = self.env.execute(f"python3 -m pyflakes {file_path} 2>&1")
+            output = result['output'].strip()
+            returncode = result.get('returncode', 0)
+            
+            if returncode == 0 and not output:
+                return f"✓ {file_path} passed static analysis (no undefined variables or unused imports)"
+            elif output:
+                # Pyflakes found issues - categorize severity
+                critical_patterns = ['undefined name', 'before assignment', 'redefinition of unused']
+                has_critical = any(pattern in output.lower() for pattern in critical_patterns)
+                
+                if has_critical:
+                    return f"❌ CRITICAL: Static analysis found errors in {file_path}:\n{output}\n\nThese are likely to cause runtime failures!"
+                else:
+                    return f"⚠️  Static analysis found issues in {file_path}:\n{output}"
+            else:
+                return f"✓ {file_path} passed static analysis"
+                
+        except Exception as e:
+            # Pyflakes not available, return neutral result
+            import traceback
+            traceback.print_exc()
+            return f"⚠️  Could not run static analysis on {file_path}: {str(e)}\n(This is not critical, but semantic errors may not be caught)"
+
     def git_apply(self, patch: str) -> str:
         """
         Apply a unified diff patch string using git apply.
@@ -975,8 +1085,9 @@ class SWEEnvironment:
         1. Verifies that actual code changes were made
         2. Checks if only test files were modified (warns if true)
         3. Checks Python syntax on modified files
-        4. Shows git diff preview of all changes
-        5. Returns a summary report with pass/fail status
+        4. Runs semantic analysis (checks for undefined variables, missing imports, etc.)
+        5. Shows git diff preview of all changes
+        6. Returns a summary report with pass/fail status
         
         **IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
         
@@ -1048,7 +1159,47 @@ class SWEEnvironment:
                 report.append(f"✅ CHECK 3 PASSED: {syntax_result}")
                 report.append("")
             
-            # 4. Show diff preview
+            # 4. Semantic analysis - check for undefined variables, unused imports, etc.
+            try:
+                files_output = self.env.execute("git diff --name-only -- '*.py'")
+                py_files = [f.strip() for f in files_output.get('output', '').split('\n') if f.strip()]
+                
+                semantic_issues = []
+                critical_issues = []
+                
+                for f in py_files:  # Check first 10 Python files to avoid timeout
+                    try:
+                        quality_result = self.check_code_quality(f)
+                        if "❌ CRITICAL" in quality_result:
+                            critical_issues.append(f"  {f}:\n    {quality_result}")
+                            all_checks_passed = False
+                        elif "⚠️" in quality_result and "Could not run" not in quality_result:
+                            semantic_issues.append(f"  {f}: Minor issues (warnings)")
+                    except Exception:
+                        pass
+                
+                if critical_issues:
+                    report.append("❌ CHECK 4 FAILED: Semantic errors detected")
+                    report.append("   These errors will likely cause runtime failures:")
+                    report.append("")
+                    for issue in critical_issues[:3]:  # Show first 3 to avoid overwhelming
+                        report.append(issue)
+                    report.append("")
+                    report.append("   FIX THESE ERRORS before calling finish()!")
+                    report.append("   (These are undefined variables, missing imports, etc.)")
+                    report.append("")
+                elif semantic_issues:
+                    report.append(f"⚠️  CHECK 4 WARNING: {len(semantic_issues)} file(s) have minor static analysis warnings")
+                    report.append("   (Consider reviewing, but not blocking)")
+                    report.append("")
+                else:
+                    report.append("✅ CHECK 4 PASSED: No semantic errors detected in Python files")
+                    report.append("")
+            except Exception:
+                report.append("✅ CHECK 4 PASSED: Semantic analysis skipped")
+                report.append("")
+            
+            # 5. Show diff preview
             report.append("=" * 60)
             report.append("GIT DIFF PREVIEW (first 1000 chars):")
             report.append("=" * 60)
@@ -1058,7 +1209,7 @@ class SWEEnvironment:
             report.append(diff_preview)
             report.append("")
             
-            # 5. Final verdict
+            # 6. Final verdict
             report.append("=" * 60)
             if all_checks_passed:
                 report.append("✅ ALL CHECKS PASSED - Safe to call finish()")

@@ -45,6 +45,7 @@ def process_instance(
     try:
         # Initialize the environment
         env = SWEEnvironment(instance)
+        env.run_bash_cmd("pip install pyflakes")
         # Initialize the agent
         agent = ReactAgent("swe-agent", parser, llm, instance_id=instance_id, output_dir=output_dir)
         
@@ -90,6 +91,7 @@ def process_instance(
             env.generate_patch,
             env.run_tests,
             env.check_repo_syntax,
+            env.check_code_quality,         # ← Semantic analysis (undefined variables, etc.)
             env.git_apply,
             env.run_python_snippet,
             env.detect_indentation,
