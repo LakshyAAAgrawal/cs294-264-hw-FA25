@@ -935,10 +935,11 @@ class SWEEnvironment:
         Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
         
         This function automatically:
-        1. Shows git diff of all changes
-        2. Checks Python syntax on modified files
-        3. Verifies that actual code changes were made
-        4. Returns a summary report with pass/fail status
+        1. Verifies that actual code changes were made
+        2. Checks if only test files were modified (warns if true)
+        3. Checks Python syntax on modified files
+        4. Shows git diff preview of all changes
+        5. Returns a summary report with pass/fail status
         
         **IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
         
@@ -972,20 +973,45 @@ class SWEEnvironment:
             report.append(f"   Lines deleted: {deletions}")
             report.append("")
             
-            # 2. Syntax check - verify no syntax errors (excluding test error files)
+            # 2. File type check - warn if only test files modified
+            try:
+                files_output = self.env.execute("git diff --name-only")
+                modified_files = [f.strip() for f in files_output.get('output', '').split('\n') if f.strip()]
+                
+                test_file_indicators = ['test_', '_test', '/test/', '/tests/', 'pytest', 'conftest']
+                test_files = [f for f in modified_files if any(ind in f.lower() for ind in test_file_indicators)]
+                source_files = [f for f in modified_files if f not in test_files]
+                
+                if test_files and not source_files:
+                    report.append("⚠️ CHECK 2 WARNING: Only test files modified")
+                    report.append(f"   Modified test files: {', '.join(test_files)}")
+                    report.append("   No source files were modified!")
+                    report.append("   Is this correct? Most tasks require modifying source code, not just tests.")
+                    report.append("")
+                elif test_files and source_files:
+                    report.append(f"✅ CHECK 2 PASSED: Modified {len(source_files)} source file(s) and {len(test_files)} test file(s)")
+                    report.append("")
+                else:
+                    report.append(f"✅ CHECK 2 PASSED: Modified {len(source_files)} source file(s)")
+                    report.append("")
+            except Exception:
+                report.append("✅ CHECK 2 PASSED: File type check skipped")
+                report.append("")
+            
+            # 3. Syntax check - verify no syntax errors
             syntax_result = self.check_repo_syntax()
             
             if "✗" in syntax_result or "Syntax errors detected" in syntax_result:
-                report.append("❌ CHECK 2 FAILED: Syntax errors detected")
+                report.append("❌ CHECK 3 FAILED: Syntax errors detected")
                 report.append(f"   {syntax_result}")
                 report.append("")
                 report.append("   FIX THESE ERRORS before calling finish()!")
                 all_checks_passed = False
             else:
-                report.append(f"✅ CHECK 2 PASSED: {syntax_result}")
+                report.append(f"✅ CHECK 3 PASSED: {syntax_result}")
                 report.append("")
             
-            # 3. Show diff preview
+            # 4. Show diff preview
             report.append("=" * 60)
             report.append("GIT DIFF PREVIEW (first 1000 chars):")
             report.append("=" * 60)
@@ -995,7 +1021,7 @@ class SWEEnvironment:
             report.append(diff_preview)
             report.append("")
             
-            # 4. Final verdict
+            # 5. Final verdict
             report.append("=" * 60)
             if all_checks_passed:
                 report.append("✅ ALL CHECKS PASSED - Safe to call finish()")

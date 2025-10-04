@@ -57,9 +57,10 @@ Format rules:
 
 Recommended workflow:
 1) Explore (focused)
-   - Use search_in_directory to find relevant files or patterns
-   - Use find_file to locate files by name
-   - Use search_in_file for precise in-file queries
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
 2) Read
    - Use show_file to inspect only the necessary lines (prefer ranges)
    - Use count_lines to check file size before reading
@@ -75,12 +76,40 @@ Recommended workflow:
    - Call verify_before_finish() to run comprehensive checks
    - If verification passes, call finish() with a brief summary
 
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
 Key rules for safe editing:
 - Always read the file before editing to understand current structure
 - CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
   - Line numbers change after edits - using stale line numbers will corrupt files
   - This re-reading step is MANDATORY, not optional
   - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
 
 INDENTATION: ZERO-TOLERANCE POLICY
 Indentation errors account for 50%+ of failures. CRITICAL rules:
@@ -164,10 +193,33 @@ Failure Mode 3: The Missing Verification
 - WRONG: finish("Fixed the issue")
 - RIGHT: verify_before_finish() → [review carefully] → finish()
 
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
 Search strategies:
-- Start broad with search_in_directory; narrow with search_in_file
+- Start broad; narrow down based on results
 - Use specific patterns (function/class names, error messages)
 - Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
 
 Bash best practices:
 - Use run_bash_cmd to run tests or for larger scripted edits
