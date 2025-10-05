@@ -159,6 +159,12 @@ class SWEEnvironment:
                 
                 # Generate visual diff (before/after comparison)
                 old_lines = lines[from_line-1:to_line]
+                
+                # CRITICAL: Check indentation consistency before applying edit
+                indentation_error = self._check_indentation_consistency(content_lines, from_line, to_line, lines, file_path)
+                if indentation_error:
+                    return indentation_error  # Reject the edit
+                
                 visual_diff = self._generate_visual_diff(old_lines, content_lines, from_line)
                 
                 # Check for potentially dangerous deletions (concise one-liner)
@@ -1280,6 +1286,69 @@ Reject only if the changes clearly don't solve the task or have critical bugs.""
             import traceback
             traceback.print_exc()
             return f"APPROVE (Judge error: {str(e)})"
+    
+    def _check_indentation_consistency(self, content_lines: list, from_line: int, to_line: int, file_lines: list, file_path: str):
+        """
+        Check if the new content has consistent indentation with surrounding code.
+        Returns error message if indentation is inconsistent, None otherwise.
+        """
+        if not content_lines or not file_path.endswith('.py'):
+            return None
+        
+        # Get surrounding context for indentation reference
+        context_before = file_lines[max(0, from_line-5):from_line-1] if from_line > 1 else []
+        context_after = file_lines[to_line:min(len(file_lines), to_line+5)] if to_line < len(file_lines) else []
+        
+        # Detect indentation level of surrounding code
+        def get_indent_level(line):
+            """Return number of leading spaces (treating tabs as 4 spaces)"""
+            if not line or not line[0].isspace():
+                return 0
+            indent = 0
+            for char in line:
+                if char == ' ':
+                    indent += 1
+                elif char == '\t':
+                    indent += 4
+                else:
+                    break
+            return indent
+        
+        # Check for inconsistent indentation within new content
+        non_empty_lines = [l for l in content_lines if l.strip()]
+        if not non_empty_lines:
+            return None
+            
+        indent_levels = [get_indent_level(l) for l in non_empty_lines]
+        
+        # Check for mixed indentation (some lines massively off from others)
+        # Allow natural variation (if/else, function bodies, etc) but catch clear errors
+        min_indent = min(indent_levels)
+        max_indent = max(indent_levels)
+        
+        # If we have context, check consistency with surrounding code
+        if context_before:
+            # Find the last non-empty line before edit
+            for line in reversed(context_before):
+                if line.strip():
+                    context_indent = get_indent_level(line)
+                    first_line_indent = indent_levels[0]
+                    
+                    # Allow ±4 spaces variation (one indentation level)
+                    # But flag if new content is oddly indented (e.g., 2 spaces when surrounding is 4)
+                    if abs(first_line_indent - context_indent) == 2 or abs(first_line_indent - context_indent) == 6:
+                        # Likely misaligned (off by 2 spaces)
+                        return (
+                            f"❌ EDIT REJECTED: Indentation mismatch detected in {file_path}\n\n"
+                            f"The new content's first line has {first_line_indent} spaces of indentation,\n"
+                            f"but surrounding code at line {from_line-1} has {context_indent} spaces.\n\n"
+                            f"This suggests a {abs(first_line_indent - context_indent)}-space misalignment.\n\n"
+                            f"Fix: Adjust indentation to match surrounding code (use show_file with highlight_whitespace=True)\n"
+                            f"Expected indent: ~{context_indent} spaces, Got: {first_line_indent} spaces"
+                        )
+                    break
+        
+        return None  # No indentation issues detected
     
     def _generate_visual_diff(self, old_lines: list, new_lines: list, start_line: int) -> str:
         """

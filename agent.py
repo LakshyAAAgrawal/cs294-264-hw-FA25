@@ -310,7 +310,7 @@ class ReactAgent:
     - Runs a Reason-Act loop until `finish` is called or MAX_STEPS is reached
     """
 
-    def __init__(self, name: str, parser: ResponseParser, llm: LLM, instance_id: str = 'default', output_dir: str = 'default', verify_code_quality_fn: Callable = None, llm_as_judge_fn: Callable = None):
+    def __init__(self, name: str, parser: ResponseParser, llm: LLM, instance_id: str = 'default', output_dir: str = 'default', verify_code_quality_fn = None, llm_as_judge_fn = None):
         self.name: str = name
         self.parser = parser
         self.llm = llm
@@ -728,39 +728,30 @@ Take a different approach now. Make a simple, safe action."""
                                 self.add_message("tool", error_msg)
                                 continue
 
-                            # Step 4: LLM-as-judge validation - check if changes actually solve the task
-                            if self.llm_as_judge_fn and (not self.llm_as_judge_invoked):
-                                self.llm_as_judge_invoked = True
-                                try:
-                                    # Get the task description
-                                    task_description = self.id_to_message[self.user_message_id]["content"]
-                                    
-                                    # oo already contains the patch from step 2
-                                    judge_verdict = self.llm_as_judge_fn(task_description, oo)
-                                    
-                                    # Parse judge response
-                                    # Expected format: verdict should contain "APPROVE" or "REJECT" with reasoning
-                                    if "REJECT" in judge_verdict or "❌" in judge_verdict:
-                                        error_msg = (
-                                            "LLM Judge Review - Changes do NOT adequately address the task:\n\n"
-                                            + judge_verdict + "\n\n"
-                                            + "Please review the feedback and make necessary corrections before calling finish() again."
-                                        )
-                                        self.add_message("tool", error_msg)
-                                        continue
-                                    elif "APPROVE" in judge_verdict or "✅" in judge_verdict:
-                                        # Judge approved - log but don't show to agent (adds noise)
-                                        print(f"[LLM Judge] Changes approved for {self.instance_id}")
-                                    else:
-                                        # Unclear response - Show the judge response to the agent
-                                        self.add_message("tool", judge_verdict)
-                                        continue
-                                        
-                                except Exception as e:
-                                    import traceback
-                                    traceback.print_exc()
-                                    print(f"[LLM Judge] Error during validation: {str(e)}")
-                                    # Don't block on judge errors - let the agent proceed
+                            # Step 4: LLM-as-judge validation - DISABLED (not effective in practice)
+                            # Analysis shows 0 rejections across all tasks, adding overhead without benefit
+                            # if self.llm_as_judge_fn and (not self.llm_as_judge_invoked):
+                            #     self.llm_as_judge_invoked = True
+                            #     try:
+                            #         task_description = self.id_to_message[self.user_message_id]["content"]
+                            #         judge_verdict = self.llm_as_judge_fn(task_description, oo)
+                            #         if "REJECT" in judge_verdict or "❌" in judge_verdict:
+                            #             error_msg = (
+                            #                 "LLM Judge Review - Changes do NOT adequately address the task:\n\n"
+                            #                 + judge_verdict + "\n\n"
+                            #                 + "Please review the feedback and make necessary corrections before calling finish() again."
+                            #             )
+                            #             self.add_message("tool", error_msg)
+                            #             continue
+                            #         elif "APPROVE" in judge_verdict or "✅" in judge_verdict:
+                            #             print(f"[LLM Judge] Changes approved for {self.instance_id}")
+                            #         else:
+                            #             self.add_message("tool", judge_verdict)
+                            #             continue
+                            #     except Exception as e:
+                            #         import traceback
+                            #         traceback.print_exc()
+                            #         print(f"[LLM Judge] Error during validation: {str(e)}")
                             
                             return result
 

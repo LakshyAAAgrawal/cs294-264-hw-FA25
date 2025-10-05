@@ -52,7 +52,7 @@ def process_instance(
             import traceback
             traceback.print_exc()
             pass
-        # Initialize the agent with verification and LLM judge functions
+        # Initialize the agent with verification function (LLM judge disabled - not effective)
         agent = ReactAgent(
             "swe-agent", 
             parser, 
@@ -60,7 +60,7 @@ def process_instance(
             instance_id=instance_id, 
             output_dir=output_dir, 
             verify_code_quality_fn=env.verify_before_finish,
-            llm_as_judge_fn=env.llm_judge_validate_changes
+            llm_as_judge_fn=None  # Disabled: 0 rejections in practice, adds overhead
         )
         
         agent.add_functions([
