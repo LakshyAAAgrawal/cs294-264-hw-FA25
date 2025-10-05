@@ -389,9 +389,10 @@ class ReactAgent:
             raise ValueError(f"Invalid message_id: {message_id}")
         self.id_to_message[message_id]["content"] = content
 
-    def get_context(self) -> str:
+    def get_context(self) -> List[Dict[str, str]]:
         """
         Build the full LLM context by walking from the root to the current message.
+        Returns a list of OpenAI-formatted message dictionaries with "role" and "content".
         """
         # Build path from root to current
         path = []
@@ -404,12 +405,44 @@ class ReactAgent:
         
         path.reverse()
         
-        # Build context string
-        context_parts = []
+        # Build context as list of message dicts
+        messages = []
         for msg_id in path:
-            context_parts.append(self.message_id_to_context(msg_id))
+            message = self.id_to_message[msg_id]
+            role = message["role"]
+            content = message["content"]
+            
+            # Handle special formatting for system messages
+            if role == "system":
+                tool_descriptions = []
+                for tool in self.function_map.values():
+                    signature = inspect.signature(tool)
+                    docstring = inspect.getdoc(tool)
+                    tool_description = f"Function: {tool.__name__}{signature}\n{docstring}\n"
+                    tool_descriptions.append(tool_description)
+                
+                tool_descriptions_str = "\n".join(tool_descriptions)
+                full_content = (
+                    f"{content}\n"
+                    f"--- AVAILABLE TOOLS ---\n{tool_descriptions_str}\n\n"
+                    f"--- RESPONSE FORMAT ---\n{self.parser.response_format}\n"
+                )
+                messages.append({"role": "system", "content": full_content})
+            
+            # Handle instructor messages (map to system role for OpenAI compatibility)
+            elif role == "instructor":
+                if content:  # Only add if there's actual content
+                    instructor_content = f"YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.\n{content}"
+                    messages.append({"role": "system", "content": instructor_content})
+            
+            # Handle all other roles (user, assistant, tool)
+            else:
+                if content or role in ["user", "assistant", "tool"]:  # Include even if empty for these roles
+                    # Convert 'tool' role to 'user' for OpenAI API compatibility
+                    serialized_role = "user" if role == "tool" else role
+                    messages.append({"role": serialized_role, "content": content})
         
-        return "".join(context_parts)
+        return messages
 
     # -------------------- REQUIRED TOOLS --------------------
     def add_functions(self, tools: List[Callable]):

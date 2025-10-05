@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import os
+from typing import List, Dict, Union
 
 try:
     from vllm import LLM as VLLM
@@ -12,9 +13,17 @@ class LLM(ABC):
     """Abstract base class for Large Language Models."""
 
     @abstractmethod
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: Union[str, List[Dict[str, str]]]) -> str:
         """
         Generate a response from the LLM given a prompt.
+        
+        Args:
+            prompt: Either a string prompt or a list of OpenAI-formatted messages
+                   with "role" and "content" keys.
+        
+        Returns:
+            The generated text response.
+        
         Must include any required stop-token logic at the caller level.
         """
         raise NotImplementedError
@@ -40,14 +49,33 @@ class OpenAIModel(LLM):
         else:
             self.client = VLLM(model_name)
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: Union[str, List[Dict[str, str]]]) -> str:
         if self.openai_model:
-            response = self.client.responses.create(model=self.model_name, tools=[{"type": "web_search_preview"}], input=prompt)
+            # Handle both string and list of messages formats
+            # Note: OpenAI Responses API accepts list of message dicts as input
+            response = self.client.responses.create(
+                model=self.model_name, 
+                tools=[{"type": "web_search_preview"}], 
+                input=prompt  # type: ignore
+            )
 
             # Get the text content and ensure stop token is present
             text = response.output_text
         else:
-            text = self.client.generate(prompt, sampling_params=SamplingParams(temperature=0.1))[0].outputs[0].text
+            # For VLLM, convert messages to string if needed
+            if isinstance(prompt, list):
+                # Convert message list to string format
+                prompt_str = "\n\n".join([
+                    f"{msg['role'].upper()}:\n{msg['content']}"
+                    for msg in prompt
+                ])
+            else:
+                prompt_str = prompt
+            
+            # VLLM client's generate method
+            sampling_params = SamplingParams(temperature=0.1)
+            outputs = self.client.generate(prompt_str, sampling_params=sampling_params)  # type: ignore
+            text = outputs[0].outputs[0].text
 
         if text and not text.endswith(self.stop_token):
             text += self.stop_token
