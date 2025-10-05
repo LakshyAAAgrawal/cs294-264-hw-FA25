@@ -1,0 +1,2481 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+CRITICAL: Before deleting lines, verify they don't contain variable definitions, imports, or function/class definitions that are used elsewhere. Deleting such lines causes runtime errors even if syntax is valid.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Checks for critical semantic errors (undefined names, etc.)
+5. Shows git diff preview of all changes
+6. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+MiddlewareNotUsed leaves undesired side effects when loading middleware in ASGI context
+Description
+	
+I experienced strange issues when working with ​ASGI , ​django-debug-toolbar and my own small middleware. It was hard problem to debug, I uploaded an example project here: ​https://github.com/hbielenia/asgi-djangotoolbar-bug (the name is misleading - I initially thought it's a bug with django-debug-toolbar).
+The SESSION_FILE_PATH setting is intentionally broken to cause a 500 error. When starting the application and accessing /admin (any location really, but I wanted to leave it at a minimum and didn't add any views) it gives TypeError: object HttpResponse can't be used in 'await' expression. Commenting out asgi_djangotoolbar_bug.middleware.DummyMiddleware fixes the issue (in that I receive a 500 ImproperlyConfigured exception). I'm not sure about the overall role of django-debug-toolbar here - removing it causes Daphne to return a 500 error page but without debug information and there's no traceback in console either. I decided to leave it since it helped me approximate the causes of issue.
+I notice that in ​https://github.com/django/django/blob/3.1.4/django/core/handlers/base.py#L58 while MiddlewareNotUsed causes the loop to skip futher processing and go to next middleware, it does leave handler variable overwritten with output of self.adapt_method_mode(). On next pass, this handler is passed to next middleware instance, disregarding all the previous checks for (lack of) async support. This likely causes the middleware chain to be "poisoned" from this point onwards, resulting in last middleware in response cycle to return an HttpResponse as a synchronous middleware would, instead of coroutine that is expected.
+This is probably avoided by adding async support to my middleware, but unless I'm missing something ​docs indicate it should work as it is. It is my intention that it's applied only on synchronous requests, so I didn't make it async compatible on purpose. If it's intentional in Django that every middleware needs to support async if the application is run as ASGI app, the documentation should probably state that clearly. Though it kinda defeats the purpose of having async_capable = False flag in the first place.
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll list the repository root to locate the Django project and the middleware files to inspect the ASGI handler and middleware chain.  
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+total 176
+drwxrwxrwx   1 root root  4096 Sep 10 11:30 .
+drwxr-xr-x   1 root root  4096 Oct  5 01:03 ..
+-rw-r--r--   1 root root   782 Sep 10 11:23 .editorconfig
+-rw-r--r--   1 root root   100 Sep 10 11:23 .eslintignore
+-rw-r--r--   1 root root  1407 Sep 10 11:23 .eslintrc
+drwxrwxrwx   8 root root  4096 Sep 10 11:30 .git
+-rw-r--r--   1 root root   297 Sep 10 11:23 .gitattributes
+drwxrwxrwx   2 root root  4096 Sep 10 11:23 .github
+-rw-r--r--   1 root root   353 Sep 10 11:23 .gitignore
+-rw-r--r--   1 root root   281 Sep 10 11:23 .pre-commit-config.yaml
+drwxrwxrwx   2 root root  4096 Sep 10 11:23 .tx
+-rw-r--r--   1 root root 38381 Sep 10 11:23 AUTHORS
+-rw-r--r--   1 root root  1115 Sep 10 11:23 CONTRIBUTING.rst
+drwxr-xr-x   2 root root  4096 Sep 10 11:30 Django.egg-info
+-rw-r--r--   1 root root   369 Sep 10 11:23 Gruntfile.js
+-rw-r--r--   1 root root   236 Sep 10 11:23 INSTALL
+-rw-r--r--   1 root root  1552 Sep 10 11:23 LICENSE
+-rw-r--r--   1 root root 13227 Sep 10 11:23 LICENSE.python
+-rw-r--r--   1 root root   276 Sep 10 11:23 MANIFEST.in
+-rw-r--r--   1 root root  2131 Sep 10 11:23 README.rst
+drwxrwxrwx  19 root root  4096 Sep 10 11:30 django
+drwxrwxrwx  13 root root  4096 Sep 10 11:23 docs
+drwxrwxrwx   2 root root  4096 Sep 10 11:23 extras
+drwxrwxrwx   4 root root  4096 Sep 10 11:23 js_tests
+-rw-r--r--   1 root root   369 Sep 10 11:23 package.json
+drwxrwxrwx   2 root root  4096 Sep 10 11:23 scripts
+-rw-r--r--   1 root root  2237 Sep 10 11:23 setup.cfg
+-rw-r--r--   1 root root  2368 Sep 10 11:23 setup.py
+drwxrwxrwx 212 root root 12288 Sep 10 11:23 tests
+-rw-r--r--   1 root root  1553 Sep 10 11:23 tox.ini
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll search the repository for occurrences of "MiddlewareNotUsed" and the DummyMiddleware to find the middleware implementation and relevant handler code to inspect next.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+MiddlewareNotUsed
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+./tests/middleware_exceptions/tests.py:2:from django.core.exceptions import MiddlewareNotUsed
+./tests/middleware_exceptions/tests.py:128:        raise MiddlewareNotUsed
+./tests/middleware_exceptions/tests.py:137:        raise MiddlewareNotUsed('spam eggs')
+./tests/middleware_exceptions/tests.py:148:class MiddlewareNotUsedTests(SimpleTestCase):
+./tests/middleware_exceptions/tests.py:154:        with self.assertRaises(MiddlewareNotUsed):
+./tests/middleware_exceptions/tests.py:163:            "MiddlewareNotUsed: 'middleware_exceptions.tests.MyMiddleware'"
+./tests/middleware_exceptions/tests.py:172:            "MiddlewareNotUsed('middleware_exceptions.tests.MyMiddlewareWithExceptionMessage'): spam eggs"
+./django/core/exceptions.py:89:class MiddlewareNotUsed(Exception):
+./django/core/handlers/base.py:8:from django.core.exceptions import ImproperlyConfigured, MiddlewareNotUsed
+./django/core/handlers/base.py:59:            except MiddlewareNotUsed as exc:
+./django/core/handlers/base.py:62:                        logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+./django/core/handlers/base.py:64:                        logger.debug('MiddlewareNotUsed: %r', middleware_path)
+./docs/ref/exceptions.txt:109:``MiddlewareNotUsed``
+./docs/ref/exceptions.txt:112:.. exception:: MiddlewareNotUsed
+./docs/ref/exceptions.txt:114:    The :exc:`MiddlewareNotUsed` exception is raised when a middleware is not
+./docs/topics/http/middleware.txt:98:method may raise :exc:`~django.core.exceptions.MiddlewareNotUsed`. Django will
+./docs/releases/1.8.txt:460:  middleware raises a :exc:`~django.core.exceptions.MiddlewareNotUsed` exception
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll inspect django/core/handlers/base.py (around the middleware handling) to see how MiddlewareNotUsed and adapt_method_mode interact with the handler variable.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+240
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+     1  import asyncio
+     2  import logging
+     3  import types
+        
+     4  from asgiref.sync import async_to_sync, sync_to_async
+        
+     5  from django.conf import settings
+     6  from django.core.exceptions import ImproperlyConfigured, MiddlewareNotUsed
+     7  from django.core.signals import request_finished
+     8  from django.db import connections, transaction
+     9  from django.urls import get_resolver, set_urlconf
+    10  from django.utils.log import log_response
+    11  from django.utils.module_loading import import_string
+        
+    12  from .exception import convert_exception_to_response
+        
+    13  logger = logging.getLogger('django.request')
+        
+        
+    14  class BaseHandler:
+    15      _view_middleware = None
+    16      _template_response_middleware = None
+    17      _exception_middleware = None
+    18      _middleware_chain = None
+        
+    19      def load_middleware(self, is_async=False):
+    20          """
+    21          Populate middleware lists from settings.MIDDLEWARE.
+        
+    22          Must be called after the environment is fixed (see __call__ in subclasses).
+    23          """
+    24          self._view_middleware = []
+    25          self._template_response_middleware = []
+    26          self._exception_middleware = []
+        
+    27          get_response = self._get_response_async if is_async else self._get_response
+    28          handler = convert_exception_to_response(get_response)
+    29          handler_is_async = is_async
+    30          for middleware_path in reversed(settings.MIDDLEWARE):
+    31              middleware = import_string(middleware_path)
+    32              middleware_can_sync = getattr(middleware, 'sync_capable', True)
+    33              middleware_can_async = getattr(middleware, 'async_capable', False)
+    34              if not middleware_can_sync and not middleware_can_async:
+    35                  raise RuntimeError(
+    36                      'Middleware %s must have at least one of '
+    37                      'sync_capable/async_capable set to True.' % middleware_path
+    38                  )
+    39              elif not handler_is_async and middleware_can_sync:
+    40                  middleware_is_async = False
+    41              else:
+    42                  middleware_is_async = middleware_can_async
+    43              try:
+    44                  # Adapt handler, if needed.
+    45                  handler = self.adapt_method_mode(
+    46                      middleware_is_async, handler, handler_is_async,
+    47                      debug=settings.DEBUG, name='middleware %s' % middleware_path,
+    48                  )
+    49                  mw_instance = middleware(handler)
+    50              except MiddlewareNotUsed as exc:
+    51                  if settings.DEBUG:
+    52                      if str(exc):
+    53                          logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+    54                      else:
+    55                          logger.debug('MiddlewareNotUsed: %r', middleware_path)
+    56                  continue
+        
+    57              if mw_instance is None:
+    58                  raise ImproperlyConfigured(
+    59                      'Middleware factory %s returned None.' % middleware_path
+    60                  )
+        
+    61              if hasattr(mw_instance, 'process_view'):
+    62                  self._view_middleware.insert(
+    63                      0,
+    64                      self.adapt_method_mode(is_async, mw_instance.process_view),
+    65                  )
+    66              if hasattr(mw_instance, 'process_template_response'):
+    67                  self._template_response_middleware.append(
+    68                      self.adapt_method_mode(is_async, mw_instance.process_template_response),
+    69                  )
+    70              if hasattr(mw_instance, 'process_exception'):
+    71                  # The exception-handling stack is still always synchronous for
+    72                  # now, so adapt that way.
+    73                  self._exception_middleware.append(
+    74                      self.adapt_method_mode(False, mw_instance.process_exception),
+    75                  )
+        
+    76              handler = convert_exception_to_response(mw_instance)
+    77              handler_is_async = middleware_is_async
+        
+    78          # Adapt the top of the stack, if needed.
+    79          handler = self.adapt_method_mode(is_async, handler, handler_is_async)
+    80          # We only assign to this when initialization is complete as it is used
+    81          # as a flag for initialization being complete.
+    82          self._middleware_chain = handler
+        
+    83      def adapt_method_mode(
+    84          self, is_async, method, method_is_async=None, debug=False, name=None,
+    85      ):
+    86          """
+    87          Adapt a method to be in the correct "mode":
+    88          - If is_async is False:
+    89            - Synchronous methods are left alone
+    90            - Asynchronous methods are wrapped with async_to_sync
+    91          - If is_async is True:
+    92            - Synchronous methods are wrapped with sync_to_async()
+    93            - Asynchronous methods are left alone
+    94          """
+    95          if method_is_async is None:
+    96              method_is_async = asyncio.iscoroutinefunction(method)
+    97          if debug and not name:
+    98              name = name or 'method %s()' % method.__qualname__
+    99          if is_async:
+   100              if not method_is_async:
+   101                  if debug:
+   102                      logger.debug('Synchronous %s adapted.', name)
+   103                  return sync_to_async(method, thread_sensitive=True)
+   104          elif method_is_async:
+   105              if debug:
+   106                  logger.debug('Asynchronous %s adapted.', name)
+   107              return async_to_sync(method)
+   108          return method
+        
+   109      def get_response(self, request):
+   110          """Return an HttpResponse object for the given HttpRequest."""
+   111          # Setup default url resolver for this thread
+   112          set_urlconf(settings.ROOT_URLCONF)
+   113          response = self._middleware_chain(request)
+   114          response._resource_closers.append(request.close)
+   115          if response.status_code >= 400:
+   116              log_response(
+   117                  '%s: %s', response.reason_phrase, request.path,
+   118                  response=response,
+   119                  request=request,
+   120              )
+   121          return response
+        
+   122      async def get_response_async(self, request):
+   123          """
+   124          Asynchronous version of get_response.
+        
+   125          Funneling everything, including WSGI, into a single async
+   126          get_response() is too slow. Avoid the context switch by using
+   127          a separate async response path.
+   128          """
+   129          # Setup default url resolver for this thread.
+   130          set_urlconf(settings.ROOT_URLCONF)
+   131          response = await self._middleware_chain(request)
+   132          response._resource_closers.append(request.close)
+   133          if response.status_code >= 400:
+   134              await sync_to_async(log_response, thread_sensitive=False)(
+   135                  '%s: %s', response.reason_phrase, request.path,
+   136                  response=response,
+   137                  request=request,
+   138              )
+   139          return response
+        
+   140      def _get_response(self, request):
+   141          """
+   142          Resolve and call the view, then apply view, exception, and
+   143          template_response middleware. This method is everything that happens
+   144          inside the request/response middleware.
+   145          """
+   146          response = None
+   147          callback, callback_args, callback_kwargs = self.resolve_request(request)
+        
+   148          # Apply view middleware
+   149          for middleware_method in self._view_middleware:
+   150              response = middleware_method(request, callback, callback_args, callback_kwargs)
+   151              if response:
+   152                  break
+        
+   153          if response is None:
+   154              wrapped_callback = self.make_view_atomic(callback)
+   155              # If it is an asynchronous view, run it in a subthread.
+   156              if asyncio.iscoroutinefunction(wrapped_callback):
+   157                  wrapped_callback = async_to_sync(wrapped_callback)
+   158              try:
+   159                  response = wrapped_callback(request, *callback_args, **callback_kwargs)
+   160              except Exception as e:
+   161                  response = self.process_exception_by_middleware(e, request)
+   162                  if response is None:
+   163                      raise
+        
+   164          # Complain if the view returned None (a common error).
+   165          self.check_response(response, callback)
+        
+   166          # If the response supports deferred rendering, apply template
+   167          # response middleware and then render the response
+   168          if hasattr(response, 'render') and callable(response.render):
+   169              for middleware_method in self._template_response_middleware:
+   170                  response = middleware_method(request, response)
+   171                  # Complain if the template response middleware returned None (a common error).
+   172                  self.check_response(
+   173                      response,
+   174                      middleware_method,
+   175                      name='%s.process_template_response' % (
+   176                          middleware_method.__self__.__class__.__name__,
+   177                      )
+   178                  )
+   179              try:
+   180                  response = response.render()
+   181              except Exception as e:
+   182                  response = self.process_exception_by_middleware(e, request)
+   183                  if response is None:
+   184                      raise
+        
+   185          return response
+        
+   186      async def _get_response_async(self, request):
+   187          """
+   188          Resolve and call the view, then apply view, exception, and
+   189          template_response middleware. This method is everything that happens
+   190          inside the request/response middleware.
+   191          """
+   192          response = None
+   193          callback, callback_args, callback_kwargs = self.resolve_request(request)
+        
+   194          # Apply view middleware.
+   195          for middleware_method in self._view_middleware:
+   196              response = await middleware_method(request, callback, callback_args, callback_kwargs)
+   197              if response:
+   198                  break
+        
+   199          if response is None:
+   200              wrapped_callback = self.make_view_atomic(callback)
+   201              # If it is a synchronous view, run it in a subthread
+   202              if not asyncio.iscoroutinefunction(wrapped_callback):
+   203                  wrapped_callback = sync_to_async(wrapped_callback, thread_sensitive=True)
+   204              try:
+   205                  response = await wrapped_callback(request, *callback_args, **callback_kwargs)
+   206              except Exception as e:
+   207                  response = await sync_to_async(
+   208                      self.process_exception_by_middleware,
+   209                      thread_sensitive=True,
+   210                  )(e, request)
+   211                  if response is None:
+   212                      raise
+        
+   213          # Complain if the view returned None or an uncalled coroutine.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I will search the repository for the DummyMiddleware implementation to inspect how it constructs its callable and whether it raises MiddlewareNotUsed in a way that can overwrite the handler.  
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+DummyMiddleware
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I will open the test file that references MiddlewareNotUsed to inspect the test cases and any related middleware implementations.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+tests/middleware_exceptions/tests.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+260
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+     1  from django.conf import settings
+     2  from django.core.exceptions import MiddlewareNotUsed
+     3  from django.http import HttpResponse
+     4  from django.test import RequestFactory, SimpleTestCase, override_settings
+        
+     5  from . import middleware as mw
+        
+        
+     6  @override_settings(ROOT_URLCONF='middleware_exceptions.urls')
+     7  class MiddlewareTests(SimpleTestCase):
+     8      def tearDown(self):
+     9          mw.log = []
+        
+    10      @override_settings(MIDDLEWARE=['middleware_exceptions.middleware.ProcessViewNoneMiddleware'])
+    11      def test_process_view_return_none(self):
+    12          response = self.client.get('/middleware_exceptions/view/')
+    13          self.assertEqual(mw.log, ['processed view normal_view'])
+    14          self.assertEqual(response.content, b'OK')
+        
+    15      @override_settings(MIDDLEWARE=['middleware_exceptions.middleware.ProcessViewMiddleware'])
+    16      def test_process_view_return_response(self):
+    17          response = self.client.get('/middleware_exceptions/view/')
+    18          self.assertEqual(response.content, b'Processed view normal_view')
+        
+    19      @override_settings(MIDDLEWARE=[
+    20          'middleware_exceptions.middleware.ProcessViewTemplateResponseMiddleware',
+    21          'middleware_exceptions.middleware.LogMiddleware',
+    22      ])
+    23      def test_templateresponse_from_process_view_rendered(self):
+    24          """
+    25          TemplateResponses returned from process_view() must be rendered before
+    26          being passed to any middleware that tries to access response.content,
+    27          such as middleware_exceptions.middleware.LogMiddleware.
+    28          """
+    29          response = self.client.get('/middleware_exceptions/view/')
+    30          self.assertEqual(response.content, b'Processed view normal_view\nProcessViewTemplateResponseMiddleware')
+        
+    31      @override_settings(MIDDLEWARE=[
+    32          'middleware_exceptions.middleware.ProcessViewTemplateResponseMiddleware',
+    33          'middleware_exceptions.middleware.TemplateResponseMiddleware',
+    34      ])
+    35      def test_templateresponse_from_process_view_passed_to_process_template_response(self):
+    36          """
+    37          TemplateResponses returned from process_view() should be passed to any
+    38          template response middleware.
+    39          """
+    40          response = self.client.get('/middleware_exceptions/view/')
+    41          expected_lines = [
+    42              b'Processed view normal_view',
+    43              b'ProcessViewTemplateResponseMiddleware',
+    44              b'TemplateResponseMiddleware',
+    45          ]
+    46          self.assertEqual(response.content, b'\n'.join(expected_lines))
+        
+    47      @override_settings(MIDDLEWARE=['middleware_exceptions.middleware.TemplateResponseMiddleware'])
+    48      def test_process_template_response(self):
+    49          response = self.client.get('/middleware_exceptions/template_response/')
+    50          self.assertEqual(response.content, b'template_response OK\nTemplateResponseMiddleware')
+        
+    51      @override_settings(MIDDLEWARE=['middleware_exceptions.middleware.NoTemplateResponseMiddleware'])
+    52      def test_process_template_response_returns_none(self):
+    53          msg = (
+    54              "NoTemplateResponseMiddleware.process_template_response didn't "
+    55              "return an HttpResponse object. It returned None instead."
+    56          )
+    57          with self.assertRaisesMessage(ValueError, msg):
+    58              self.client.get('/middleware_exceptions/template_response/')
+        
+    59      @override_settings(MIDDLEWARE=['middleware_exceptions.middleware.LogMiddleware'])
+    60      def test_view_exception_converted_before_middleware(self):
+    61          response = self.client.get('/middleware_exceptions/permission_denied/')
+    62          self.assertEqual(mw.log, [(response.status_code, response.content)])
+    63          self.assertEqual(response.status_code, 403)
+        
+    64      @override_settings(MIDDLEWARE=['middleware_exceptions.middleware.ProcessExceptionMiddleware'])
+    65      def test_view_exception_handled_by_process_exception(self):
+    66          response = self.client.get('/middleware_exceptions/error/')
+    67          self.assertEqual(response.content, b'Exception caught')
+        
+    68      @override_settings(MIDDLEWARE=[
+    69          'middleware_exceptions.middleware.ProcessExceptionLogMiddleware',
+    70          'middleware_exceptions.middleware.ProcessExceptionMiddleware',
+    71      ])
+    72      def test_response_from_process_exception_short_circuits_remainder(self):
+    73          response = self.client.get('/middleware_exceptions/error/')
+    74          self.assertEqual(mw.log, [])
+    75          self.assertEqual(response.content, b'Exception caught')
+        
+    76      @override_settings(MIDDLEWARE=[
+    77          'middleware_exceptions.middleware.ProcessExceptionMiddleware',
+    78          'middleware_exceptions.middleware.ProcessExceptionLogMiddleware',
+    79      ])
+    80      def test_response_from_process_exception_when_return_response(self):
+    81          response = self.client.get('/middleware_exceptions/error/')
+    82          self.assertEqual(mw.log, ['process-exception'])
+    83          self.assertEqual(response.content, b'Exception caught')
+        
+    84      @override_settings(MIDDLEWARE=[
+    85          'middleware_exceptions.middleware.LogMiddleware',
+    86          'middleware_exceptions.middleware.NotFoundMiddleware',
+    87      ])
+    88      def test_exception_in_middleware_converted_before_prior_middleware(self):
+    89          response = self.client.get('/middleware_exceptions/view/')
+    90          self.assertEqual(mw.log, [(404, response.content)])
+    91          self.assertEqual(response.status_code, 404)
+        
+    92      @override_settings(MIDDLEWARE=['middleware_exceptions.middleware.ProcessExceptionMiddleware'])
+    93      def test_exception_in_render_passed_to_process_exception(self):
+    94          response = self.client.get('/middleware_exceptions/exception_in_render/')
+    95          self.assertEqual(response.content, b'Exception caught')
+        
+        
+    96  @override_settings(ROOT_URLCONF='middleware_exceptions.urls')
+    97  class RootUrlconfTests(SimpleTestCase):
+        
+    98      @override_settings(ROOT_URLCONF=None)
+    99      def test_missing_root_urlconf(self):
+   100          # Removing ROOT_URLCONF is safe, as override_settings will restore
+   101          # the previously defined settings.
+   102          del settings.ROOT_URLCONF
+   103          with self.assertRaises(AttributeError):
+   104              self.client.get("/middleware_exceptions/view/")
+        
+        
+   105  class MyMiddleware:
+        
+   106      def __init__(self, get_response):
+   107          raise MiddlewareNotUsed
+        
+   108      def process_request(self, request):
+   109          pass
+        
+        
+   110  class MyMiddlewareWithExceptionMessage:
+        
+   111      def __init__(self, get_response):
+   112          raise MiddlewareNotUsed('spam eggs')
+        
+   113      def process_request(self, request):
+   114          pass
+        
+        
+   115  @override_settings(
+   116      DEBUG=True,
+   117      ROOT_URLCONF='middleware_exceptions.urls',
+   118      MIDDLEWARE=['django.middleware.common.CommonMiddleware'],
+   119  )
+   120  class MiddlewareNotUsedTests(SimpleTestCase):
+        
+   121      rf = RequestFactory()
+        
+   122      def test_raise_exception(self):
+   123          request = self.rf.get('middleware_exceptions/view/')
+   124          with self.assertRaises(MiddlewareNotUsed):
+   125              MyMiddleware(lambda req: HttpResponse()).process_request(request)
+        
+   126      @override_settings(MIDDLEWARE=['middleware_exceptions.tests.MyMiddleware'])
+   127      def test_log(self):
+   128          with self.assertLogs('django.request', 'DEBUG') as cm:
+   129              self.client.get('/middleware_exceptions/view/')
+   130          self.assertEqual(
+   131              cm.records[0].getMessage(),
+   132              "MiddlewareNotUsed: 'middleware_exceptions.tests.MyMiddleware'"
+   133          )
+        
+   134      @override_settings(MIDDLEWARE=['middleware_exceptions.tests.MyMiddlewareWithExceptionMessage'])
+   135      def test_log_custom_message(self):
+   136          with self.assertLogs('django.request', 'DEBUG') as cm:
+   137              self.client.get('/middleware_exceptions/view/')
+   138          self.assertEqual(
+   139              cm.records[0].getMessage(),
+   140              "MiddlewareNotUsed('middleware_exceptions.tests.MyMiddlewareWithExceptionMessage'): spam eggs"
+   141          )
+        
+   142      @override_settings(
+   143          DEBUG=False,
+   144          MIDDLEWARE=['middleware_exceptions.tests.MyMiddleware'],
+   145      )
+   146      def test_do_not_log_when_debug_is_false(self):
+   147          with self.assertRaisesMessage(AssertionError, 'no logs'):
+   148              with self.assertLogs('django.request', 'DEBUG'):
+   149                  self.client.get('/middleware_exceptions/view/')
+        
+        
+   150  @override_settings(
+   151      DEBUG=True,
+   152      ROOT_URLCONF='middleware_exceptions.urls',
+   153  )
+   154  class MiddlewareSyncAsyncTests(SimpleTestCase):
+   155      @override_settings(MIDDLEWARE=[
+   156          'middleware_exceptions.middleware.PaymentMiddleware',
+   157      ])
+   158      def test_sync_middleware(self):
+   159          response = self.client.get('/middleware_exceptions/view/')
+   160          self.assertEqual(response.status_code, 402)
+        
+   161      @override_settings(MIDDLEWARE=[
+   162          'middleware_exceptions.middleware.DecoratedPaymentMiddleware',
+   163      ])
+   164      def test_sync_decorated_middleware(self):
+   165          response = self.client.get('/middleware_exceptions/view/')
+   166          self.assertEqual(response.status_code, 402)
+        
+   167      @override_settings(MIDDLEWARE=[
+   168          'middleware_exceptions.middleware.async_payment_middleware',
+   169      ])
+   170      def test_async_middleware(self):
+   171          with self.assertLogs('django.request', 'DEBUG') as cm:
+   172              response = self.client.get('/middleware_exceptions/view/')
+   173          self.assertEqual(response.status_code, 402)
+   174          self.assertEqual(
+   175              cm.records[0].getMessage(),
+   176              "Synchronous middleware "
+   177              "middleware_exceptions.middleware.async_payment_middleware "
+   178              "adapted.",
+   179          )
+        
+   180      @override_settings(MIDDLEWARE=[
+   181          'middleware_exceptions.middleware.NotSyncOrAsyncMiddleware',
+   182      ])
+   183      def test_not_sync_or_async_middleware(self):
+   184          msg = (
+   185              'Middleware '
+   186              'middleware_exceptions.middleware.NotSyncOrAsyncMiddleware must '
+   187              'have at least one of sync_capable/async_capable set to True.'
+   188          )
+   189          with self.assertRaisesMessage(RuntimeError, msg):
+   190              self.client.get('/middleware_exceptions/view/')
+        
+   191      @override_settings(MIDDLEWARE=[
+   192          'middleware_exceptions.middleware.PaymentMiddleware',
+   193      ])
+   194      async def test_sync_middleware_async(self):
+   195          with self.assertLogs('django.request', 'DEBUG') as cm:
+   196              response = await self.async_client.get('/middleware_exceptions/view/')
+   197          self.assertEqual(response.status_code, 402)
+   198          self.assertEqual(
+   199              cm.records[0].getMessage(),
+   200              "Asynchronous middleware "
+   201              "middleware_exceptions.middleware.PaymentMiddleware adapted.",
+   202          )
+        
+   203      @override_settings(MIDDLEWARE=[
+   204          'middleware_exceptions.middleware.async_payment_middleware',
+   205      ])
+   206      async def test_async_middleware_async(self):
+   207          with self.assertLogs('django.request', 'WARNING') as cm:
+   208              response = await self.async_client.get('/middleware_exceptions/view/')
+   209          self.assertEqual(response.status_code, 402)
+   210          self.assertEqual(
+   211              cm.records[0].getMessage(),
+   212              'Payment Required: /middleware_exceptions/view/',
+   213          )
+        
+   214      @override_settings(
+   215          DEBUG=False,
+   216          MIDDLEWARE=[
+   217              'middleware_exceptions.middleware.AsyncNoTemplateResponseMiddleware',
+   218          ],
+   219      )
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll open the middleware implementation used in the tests to inspect how middleware factories and MiddlewareNotUsed are handled.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+tests/middleware_exceptions/middleware.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+400
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+     1  from django.http import Http404, HttpResponse
+     2  from django.template import engines
+     3  from django.template.response import TemplateResponse
+     4  from django.utils.decorators import (
+     5      async_only_middleware, sync_and_async_middleware, sync_only_middleware,
+     6  )
+        
+     7  log = []
+        
+        
+     8  class BaseMiddleware:
+     9      def __init__(self, get_response):
+    10          self.get_response = get_response
+        
+    11      def __call__(self, request):
+    12          return self.get_response(request)
+        
+        
+    13  class ProcessExceptionMiddleware(BaseMiddleware):
+    14      def process_exception(self, request, exception):
+    15          return HttpResponse('Exception caught')
+        
+        
+    16  @async_only_middleware
+    17  class AsyncProcessExceptionMiddleware(BaseMiddleware):
+    18      async def process_exception(self, request, exception):
+    19          return HttpResponse('Exception caught')
+        
+        
+    20  class ProcessExceptionLogMiddleware(BaseMiddleware):
+    21      def process_exception(self, request, exception):
+    22          log.append('process-exception')
+        
+        
+    23  class ProcessExceptionExcMiddleware(BaseMiddleware):
+    24      def process_exception(self, request, exception):
+    25          raise Exception('from process-exception')
+        
+        
+    26  class ProcessViewMiddleware(BaseMiddleware):
+    27      def process_view(self, request, view_func, view_args, view_kwargs):
+    28          return HttpResponse('Processed view %s' % view_func.__name__)
+        
+        
+    29  @async_only_middleware
+    30  class AsyncProcessViewMiddleware(BaseMiddleware):
+    31      async def process_view(self, request, view_func, view_args, view_kwargs):
+    32          return HttpResponse('Processed view %s' % view_func.__name__)
+        
+        
+    33  class ProcessViewNoneMiddleware(BaseMiddleware):
+    34      def process_view(self, request, view_func, view_args, view_kwargs):
+    35          log.append('processed view %s' % view_func.__name__)
+    36          return None
+        
+        
+    37  class ProcessViewTemplateResponseMiddleware(BaseMiddleware):
+    38      def process_view(self, request, view_func, view_args, view_kwargs):
+    39          template = engines['django'].from_string('Processed view {{ view }}{% for m in mw %}\n{{ m }}{% endfor %}')
+    40          return TemplateResponse(request, template, {'mw': [self.__class__.__name__], 'view': view_func.__name__})
+        
+        
+    41  class TemplateResponseMiddleware(BaseMiddleware):
+    42      def process_template_response(self, request, response):
+    43          response.context_data['mw'].append(self.__class__.__name__)
+    44          return response
+        
+        
+    45  @async_only_middleware
+    46  class AsyncTemplateResponseMiddleware(BaseMiddleware):
+    47      async def process_template_response(self, request, response):
+    48          response.context_data['mw'].append(self.__class__.__name__)
+    49          return response
+        
+        
+    50  class LogMiddleware(BaseMiddleware):
+    51      def __call__(self, request):
+    52          response = self.get_response(request)
+    53          log.append((response.status_code, response.content))
+    54          return response
+        
+        
+    55  class NoTemplateResponseMiddleware(BaseMiddleware):
+    56      def process_template_response(self, request, response):
+    57          return None
+        
+        
+    58  @async_only_middleware
+    59  class AsyncNoTemplateResponseMiddleware(BaseMiddleware):
+    60      async def process_template_response(self, request, response):
+    61          return None
+        
+        
+    62  class NotFoundMiddleware(BaseMiddleware):
+    63      def __call__(self, request):
+    64          raise Http404('not found')
+        
+        
+    65  class PaymentMiddleware(BaseMiddleware):
+    66      def __call__(self, request):
+    67          response = self.get_response(request)
+    68          response.status_code = 402
+    69          return response
+        
+        
+    70  @async_only_middleware
+    71  def async_payment_middleware(get_response):
+    72      async def middleware(request):
+    73          response = await get_response(request)
+    74          response.status_code = 402
+    75          return response
+        
+    76      return middleware
+        
+        
+    77  @sync_and_async_middleware
+    78  class SyncAndAsyncMiddleware(BaseMiddleware):
+    79      pass
+        
+        
+    80  @sync_only_middleware
+    81  class DecoratedPaymentMiddleware(PaymentMiddleware):
+    82      pass
+        
+        
+    83  class NotSyncOrAsyncMiddleware(BaseMiddleware):
+    84      """Middleware that is deliberately neither sync or async."""
+    85      sync_capable = False
+    86      async_capable = False
+        
+    87      def __call__(self, request):
+    88          return self.get_response(request)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I'll detect the file's indentation style before making the minimal edit to avoid mixing tabs/spaces and to prepare a safe, line-level replacement.
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+django/core/handlers/base.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I will make a minimal change: stop overwriting the outer `handler` when adapting its call mode by adapting into a local variable (`adapted_handler`) and only pass that to the middleware factory. This prevents a raised MiddlewareNotUsed from "poisoning" the top-level handler.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+from_line
+43
+----ARG----
+to_line
+49
+----ARG----
+content
+            try:
+                # Adapt handler into a local variable, if needed.
+                adapted_handler = self.adapt_method_mode(
+                    middleware_is_async, handler, handler_is_async,
+                    debug=settings.DEBUG, name='middleware %s' % middleware_path,
+                )
+                mw_instance = middleware(adapted_handler)
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+✓ Successfully replaced lines 43-49 in django/core/handlers/base.py. Replaced 7 lines with 7 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 349 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+    43 - │             if not middleware_can_sync and not middleware_ca…
+    43 + │             try: 
+    44 - │                 raise RuntimeError(
+    44 + │                 # Adapt handler into a local variable, if ne… 
+    45 - │                     'Middleware %s must have at least one of…
+    45 + │                 adapted_handler = self.adapt_method_mode( ⚠️INDENT
+    46 - │                     'sync_capable/async_capable set to True.…
+    46 + │                     middleware_is_async, handler, handler_is… 
+    47 - │                 )
+    47 + │                     debug=settings.DEBUG, name='middleware %… ⚠️INDENT
+    48 - │             elif not handler_is_async and middleware_can_syn…
+    48 + │                 ) ⚠️INDENT
+    49 - │                 middleware_is_async = False
+    49 + │                 mw_instance = middleware(adapted_handler) 
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/core/handlers/base.py:
+✗ Syntax error in django/core/handlers/base.py:
+File "django/core/handlers/base.py", line 50
+    else:
+       ^
+SyntaxError: invalid syntax
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+I need to inspect the modified region to locate the syntax error introduced by the last replacement and plan a minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+120
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+     1  import asyncio
+     2  import logging
+     3  import types
+        
+     4  from asgiref.sync import async_to_sync, sync_to_async
+        
+     5  from django.conf import settings
+     6  from django.core.exceptions import ImproperlyConfigured, MiddlewareNotUsed
+     7  from django.core.signals import request_finished
+     8  from django.db import connections, transaction
+     9  from django.urls import get_resolver, set_urlconf
+    10  from django.utils.log import log_response
+    11  from django.utils.module_loading import import_string
+        
+    12  from .exception import convert_exception_to_response
+        
+    13  logger = logging.getLogger('django.request')
+        
+        
+    14  class BaseHandler:
+    15      _view_middleware = None
+    16      _template_response_middleware = None
+    17      _exception_middleware = None
+    18      _middleware_chain = None
+        
+    19      def load_middleware(self, is_async=False):
+    20          """
+    21          Populate middleware lists from settings.MIDDLEWARE.
+        
+    22          Must be called after the environment is fixed (see __call__ in subclasses).
+    23          """
+    24          self._view_middleware = []
+    25          self._template_response_middleware = []
+    26          self._exception_middleware = []
+        
+    27          get_response = self._get_response_async if is_async else self._get_response
+    28          handler = convert_exception_to_response(get_response)
+    29          handler_is_async = is_async
+    30          for middleware_path in reversed(settings.MIDDLEWARE):
+    31              middleware = import_string(middleware_path)
+    32              middleware_can_sync = getattr(middleware, 'sync_capable', True)
+    33              middleware_can_async = getattr(middleware, 'async_capable', False)
+    34              try:
+    35                  # Adapt handler into a local variable, if needed.
+    36                  adapted_handler = self.adapt_method_mode(
+    37                      middleware_is_async, handler, handler_is_async,
+    38                      debug=settings.DEBUG, name='middleware %s' % middleware_path,
+    39                  )
+    40                  mw_instance = middleware(adapted_handler)
+    41              else:
+    42                  middleware_is_async = middleware_can_async
+    43              try:
+    44                  # Adapt handler, if needed.
+    45                  handler = self.adapt_method_mode(
+    46                      middleware_is_async, handler, handler_is_async,
+    47                      debug=settings.DEBUG, name='middleware %s' % middleware_path,
+    48                  )
+    49                  mw_instance = middleware(handler)
+    50              except MiddlewareNotUsed as exc:
+    51                  if settings.DEBUG:
+    52                      if str(exc):
+    53                          logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+    54                      else:
+    55                          logger.debug('MiddlewareNotUsed: %r', middleware_path)
+    56                  continue
+        
+    57              if mw_instance is None:
+    58                  raise ImproperlyConfigured(
+    59                      'Middleware factory %s returned None.' % middleware_path
+    60                  )
+        
+    61              if hasattr(mw_instance, 'process_view'):
+    62                  self._view_middleware.insert(
+    63                      0,
+    64                      self.adapt_method_mode(is_async, mw_instance.process_view),
+    65                  )
+    66              if hasattr(mw_instance, 'process_template_response'):
+    67                  self._template_response_middleware.append(
+    68                      self.adapt_method_mode(is_async, mw_instance.process_template_response),
+    69                  )
+    70              if hasattr(mw_instance, 'process_exception'):
+    71                  # The exception-handling stack is still always synchronous for
+    72                  # now, so adapt that way.
+    73                  self._exception_middleware.append(
+    74                      self.adapt_method_mode(False, mw_instance.process_exception),
+    75                  )
+        
+    76              handler = convert_exception_to_response(mw_instance)
+    77              handler_is_async = middleware_is_async
+        
+    78          # Adapt the top of the stack, if needed.
+    79          handler = self.adapt_method_mode(is_async, handler, handler_is_async)
+    80          # We only assign to this when initialization is complete as it is used
+    81          # as a flag for initialization being complete.
+    82          self._middleware_chain = handler
+        
+    83      def adapt_method_mode(
+    84          self, is_async, method, method_is_async=None, debug=False, name=None,
+    85      ):
+    86          """
+    87          Adapt a method to be in the correct "mode":
+    88          - If is_async is False:
+    89            - Synchronous methods are left alone
+    90            - Asynchronous methods are wrapped with async_to_sync
+    91          - If is_async is True:
+    92            - Synchronous methods are wrapped with sync_to_async()
+    93            - Asynchronous methods are left alone
+    94          """
+    95          if method_is_async is None:
+    96              method_is_async = asyncio.iscoroutinefunction(method)
+    97          if debug and not name:
+    98              name = name or 'method %s()' % method.__qualname__
+    99          if is_async:
+   100              if not method_is_async:
+   101                  if debug:
+   102                      logger.debug('Synchronous %s adapted.', name)
+   103                  return sync_to_async(method, thread_sensitive=True)
+   104          elif method_is_async:
+   105              if debug:
+   106                  logger.debug('Asynchronous %s adapted.', name)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I will fix the syntax error by restoring the original middleware capability checks and using a locally adapted handler (adapted_handler) inside the try/except so MiddlewareNotUsed doesn't overwrite the outer handler. I'll replace lines 34–50 with the minimal corrected block.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+from_line
+34
+----ARG----
+to_line
+50
+----ARG----
+content
+            if not middleware_can_sync and not middleware_can_async:
+                raise RuntimeError(
+                    'Middleware %s must have at least one of '
+                    'sync_capable/async_capable set to True.' % middleware_path
+                )
+            elif not handler_is_async and middleware_can_sync:
+                middleware_is_async = False
+            else:
+                middleware_is_async = middleware_can_async
+            try:
+                # Adapt handler into a local variable, if needed.
+                adapted_handler = self.adapt_method_mode(
+                    middleware_is_async, handler, handler_is_async,
+                    debug=settings.DEBUG, name='middleware %s' % middleware_path,
+                )
+                mw_instance = middleware(adapted_handler)
+            except MiddlewareNotUsed as exc:
+                if settings.DEBUG:
+                    if str(exc):
+                        logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+                    else:
+                        logger.debug('MiddlewareNotUsed: %r', middleware_path)
+                continue
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+✓ Successfully replaced lines 34-50 in django/core/handlers/base.py. Replaced 17 lines with 23 lines (net change: +6 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 355 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+    34 - │         self._exception_middleware = []
+    34 + │             if not middleware_can_sync and not middleware_ca… ⚠️INDENT
+    35 - │ 
+    35 + │                 raise RuntimeError( ⚠️INDENT
+    36 - │         get_response = self._get_response_async if is_async …
+    36 + │                     'Middleware %s must have at least one of… ⚠️INDENT
+    37 - │         handler = convert_exception_to_response(get_response…
+    37 + │                     'sync_capable/async_capable set to True.… ⚠️INDENT
+    38 - │         handler_is_async = is_async
+    38 + │                 ) ⚠️INDENT
+    39 - │         for middleware_path in reversed(settings.MIDDLEWARE)…
+    39 + │             elif not handler_is_async and middleware_can_syn… ⚠️INDENT
+    40 - │             middleware = import_string(middleware_path)
+    40 + │                 middleware_is_async = False ⚠️INDENT
+    41 - │             middleware_can_sync = getattr(middleware, 'sync_…
+    41 + │             else: 
+    42 - │             middleware_can_async = getattr(middleware, 'asyn…
+    42 + │                 middleware_is_async = middleware_can_async ⚠️INDENT
+    43   │             try:
+    44   │                 # Adapt handler into a local variable, if ne…
+    45   │                 adapted_handler = self.adapt_method_mode(
+    46   │                     middleware_is_async, handler, handler_is…
+    47   │                     debug=settings.DEBUG, name='middleware %…
+    48   │                 )
+  ... (8 more lines not shown)
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/core/handlers/base.py:
+✗ Syntax error in django/core/handlers/base.py:
+Sorry: IndentationError: unexpected indent (base.py, line 34)
+
+----------------------------
+|MESSAGE(role="assistant", id=23)|
+I need to inspect the region to see the incorrect indentation before making a minimal, correctly-indented fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+24
+----ARG----
+end_line
+60
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=24)|
+    24      _middleware_chain = None
+        
+    25      def load_middleware(self, is_async=False):
+    26          """
+    27          Populate middleware lists from settings.MIDDLEWARE.
+        
+    28          Must be called after the environment is fixed (see __call__ in subclasses).
+    29          """
+    30          self._view_middleware = []
+    31          self._template_response_middleware = []
+    32              if not middleware_can_sync and not middleware_can_async:
+    33                  raise RuntimeError(
+    34                      'Middleware %s must have at least one of '
+    35                      'sync_capable/async_capable set to True.' % middleware_path
+    36                  )
+    37              elif not handler_is_async and middleware_can_sync:
+    38                  middleware_is_async = False
+    39              else:
+    40                  middleware_is_async = middleware_can_async
+    41              try:
+    42                  # Adapt handler into a local variable, if needed.
+    43                  adapted_handler = self.adapt_method_mode(
+    44                      middleware_is_async, handler, handler_is_async,
+    45                      debug=settings.DEBUG, name='middleware %s' % middleware_path,
+    46                  )
+    47                  mw_instance = middleware(adapted_handler)
+    48              except MiddlewareNotUsed as exc:
+    49                  if settings.DEBUG:
+    50                      if str(exc):
+    51                          logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+    52                      else:
+    53                          logger.debug('MiddlewareNotUsed: %r', middleware_path)
+    54                  continue
+    55                  middleware_is_async = middleware_can_async
+    56              try:
+    57                  # Adapt handler, if needed.
+    58                  handler = self.adapt_method_mode(
+
+
+----------------------------
+|MESSAGE(role="assistant", id=25)|
+I need to re-read the affected region to craft a minimal, correctly-indented fix that restores the for-loop and uses a local adapted_handler; I'll show lines 24–90 to get exact current context/line numbers.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+24
+----ARG----
+end_line
+90
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=26)|
+    24      _middleware_chain = None
+        
+    25      def load_middleware(self, is_async=False):
+    26          """
+    27          Populate middleware lists from settings.MIDDLEWARE.
+        
+    28          Must be called after the environment is fixed (see __call__ in subclasses).
+    29          """
+    30          self._view_middleware = []
+    31          self._template_response_middleware = []
+    32              if not middleware_can_sync and not middleware_can_async:
+    33                  raise RuntimeError(
+    34                      'Middleware %s must have at least one of '
+    35                      'sync_capable/async_capable set to True.' % middleware_path
+    36                  )
+    37              elif not handler_is_async and middleware_can_sync:
+    38                  middleware_is_async = False
+    39              else:
+    40                  middleware_is_async = middleware_can_async
+    41              try:
+    42                  # Adapt handler into a local variable, if needed.
+    43                  adapted_handler = self.adapt_method_mode(
+    44                      middleware_is_async, handler, handler_is_async,
+    45                      debug=settings.DEBUG, name='middleware %s' % middleware_path,
+    46                  )
+    47                  mw_instance = middleware(adapted_handler)
+    48              except MiddlewareNotUsed as exc:
+    49                  if settings.DEBUG:
+    50                      if str(exc):
+    51                          logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+    52                      else:
+    53                          logger.debug('MiddlewareNotUsed: %r', middleware_path)
+    54                  continue
+    55                  middleware_is_async = middleware_can_async
+    56              try:
+    57                  # Adapt handler, if needed.
+    58                  handler = self.adapt_method_mode(
+    59                      middleware_is_async, handler, handler_is_async,
+    60                      debug=settings.DEBUG, name='middleware %s' % middleware_path,
+    61                  )
+    62                  mw_instance = middleware(handler)
+    63              except MiddlewareNotUsed as exc:
+    64                  if settings.DEBUG:
+    65                      if str(exc):
+    66                          logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+    67                      else:
+    68                          logger.debug('MiddlewareNotUsed: %r', middleware_path)
+    69                  continue
+        
+    70              if mw_instance is None:
+    71                  raise ImproperlyConfigured(
+    72                      'Middleware factory %s returned None.' % middleware_path
+    73                  )
+        
+    74              if hasattr(mw_instance, 'process_view'):
+    75                  self._view_middleware.insert(
+    76                      0,
+    77                      self.adapt_method_mode(is_async, mw_instance.process_view),
+    78                  )
+    79              if hasattr(mw_instance, 'process_template_response'):
+    80                  self._template_response_middleware.append(
+    81                      self.adapt_method_mode(is_async, mw_instance.process_template_response),
+    82                  )
+    83              if hasattr(mw_instance, 'process_exception'):
+    84                  # The exception-handling stack is still always synchronous for
+    85                  # now, so adapt that way.
+    86                  self._exception_middleware.append(
+
+
+----------------------------
+|MESSAGE(role="assistant", id=27)|
+I will restore the for-loop and surrounding assignments with correct 4-space indentation and use a local adapted_handler so MiddlewareNotUsed cannot overwrite the outer handler (minimal, targeted change).  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+from_line
+30
+----ARG----
+to_line
+62
+----ARG----
+content
+        self._view_middleware = []
+        self._template_response_middleware = []
+        self._exception_middleware = []
+        
+        get_response = self._get_response_async if is_async else self._get_response
+        handler = convert_exception_to_response(get_response)
+        handler_is_async = is_async
+        for middleware_path in reversed(settings.MIDDLEWARE):
+            middleware = import_string(middleware_path)
+            middleware_can_sync = getattr(middleware, 'sync_capable', True)
+            middleware_can_async = getattr(middleware, 'async_capable', False)
+            if not middleware_can_sync and not middleware_can_async:
+                raise RuntimeError(
+                    'Middleware %s must have at least one of '
+                    'sync_capable/async_capable set to True.' % middleware_path
+                )
+            elif not handler_is_async and middleware_can_sync:
+                middleware_is_async = False
+            else:
+                middleware_is_async = middleware_can_async
+            try:
+                # Adapt handler into a local variable, if needed.
+                adapted_handler = self.adapt_method_mode(
+                    middleware_is_async, handler, handler_is_async,
+                    debug=settings.DEBUG, name='middleware %s' % middleware_path,
+                )
+                mw_instance = middleware(adapted_handler)
+            except MiddlewareNotUsed as exc:
+                if settings.DEBUG:
+                    if str(exc):
+                        logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+                    else:
+                        logger.debug('MiddlewareNotUsed: %r', middleware_path)
+                continue
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=28)|
+✓ Successfully replaced lines 30-62 in django/core/handlers/base.py. Replaced 33 lines with 34 lines (net change: +1 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 356 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+    30 - │         Must be called after the environment is fixed (see _…
+    30 + │         self._view_middleware = [] 
+    31 - │         """
+    31 + │         self._template_response_middleware = [] 
+    32 - │         self._view_middleware = []
+    32 + │         self._exception_middleware = [] 
+    33 - │         self._template_response_middleware = []
+    33 + │          
+    34 - │             if not middleware_can_sync and not middleware_ca…
+    34 + │         get_response = self._get_response_async if is_async … ⚠️INDENT
+    35 - │                 raise RuntimeError(
+    35 + │         handler = convert_exception_to_response(get_response… ⚠️INDENT
+    36 - │                     'Middleware %s must have at least one of…
+    36 + │         handler_is_async = is_async ⚠️INDENT
+    37 - │                     'sync_capable/async_capable set to True.…
+    37 + │         for middleware_path in reversed(settings.MIDDLEWARE)… ⚠️INDENT
+    38 - │                 )
+    38 + │             middleware = import_string(middleware_path) ⚠️INDENT
+    39 - │             elif not handler_is_async and middleware_can_syn…
+    39 + │             middleware_can_sync = getattr(middleware, 'sync_… 
+    40 - │                 middleware_is_async = False
+    40 + │             middleware_can_async = getattr(middleware, 'asyn… ⚠️INDENT
+    41 - │             else:
+    41 + │             if not middleware_can_sync and not middleware_ca… 
+    42 - │                 middleware_is_async = middleware_can_async
+    42 + │                 raise RuntimeError( 
+    43 - │             try:
+    43 + │                     'Middleware %s must have at least one of… ⚠️INDENT
+    44 - │                 # Adapt handler into a local variable, if ne…
+    44 + │                     'sync_capable/async_capable set to True.… ⚠️INDENT
+  ... (19 more lines not shown)
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/core/handlers/base.py:
+✗ Syntax error in django/core/handlers/base.py:
+File "django/core/handlers/base.py", line 108
+    Adapt a method to be in the correct "mode":
+          ^
+SyntaxError: invalid syntax
+
+----------------------------
+|MESSAGE(role="assistant", id=29)|
+The file still has indentation/syntax issues from the previous edits; I'll display the top 200 lines to inspect current structure and find the incorrect indentation to fix next.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+200
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=30)|
+     1  import asyncio
+     2  import logging
+     3  import types
+        
+     4  from asgiref.sync import async_to_sync, sync_to_async
+        
+     5  from django.conf import settings
+     6  from django.core.exceptions import ImproperlyConfigured, MiddlewareNotUsed
+     7  from django.core.signals import request_finished
+     8  from django.db import connections, transaction
+     9  from django.urls import get_resolver, set_urlconf
+    10  from django.utils.log import log_response
+    11  from django.utils.module_loading import import_string
+        
+    12  from .exception import convert_exception_to_response
+        
+    13  logger = logging.getLogger('django.request')
+        
+        
+    14  class BaseHandler:
+    15      _view_middleware = None
+    16      _template_response_middleware = None
+    17      _exception_middleware = None
+    18      _middleware_chain = None
+        
+    19      def load_middleware(self, is_async=False):
+    20          """
+    21          Populate middleware lists from settings.MIDDLEWARE.
+        
+    22          self._view_middleware = []
+    23          self._template_response_middleware = []
+    24          self._exception_middleware = []
+    25          
+    26          get_response = self._get_response_async if is_async else self._get_response
+    27          handler = convert_exception_to_response(get_response)
+    28          handler_is_async = is_async
+    29          for middleware_path in reversed(settings.MIDDLEWARE):
+    30              middleware = import_string(middleware_path)
+    31              middleware_can_sync = getattr(middleware, 'sync_capable', True)
+    32              middleware_can_async = getattr(middleware, 'async_capable', False)
+    33              if not middleware_can_sync and not middleware_can_async:
+    34                  raise RuntimeError(
+    35                      'Middleware %s must have at least one of '
+    36                      'sync_capable/async_capable set to True.' % middleware_path
+    37                  )
+    38              elif not handler_is_async and middleware_can_sync:
+    39                  middleware_is_async = False
+    40              else:
+    41                  middleware_is_async = middleware_can_async
+    42              try:
+    43                  # Adapt handler into a local variable, if needed.
+    44                  adapted_handler = self.adapt_method_mode(
+    45                      middleware_is_async, handler, handler_is_async,
+    46                      debug=settings.DEBUG, name='middleware %s' % middleware_path,
+    47                  )
+    48                  mw_instance = middleware(adapted_handler)
+    49              except MiddlewareNotUsed as exc:
+    50                  if settings.DEBUG:
+    51                      if str(exc):
+    52                          logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+    53                      else:
+    54                          logger.debug('MiddlewareNotUsed: %r', middleware_path)
+    55                  continue
+    56                  )
+    57                  mw_instance = middleware(handler)
+    58              except MiddlewareNotUsed as exc:
+    59                  if settings.DEBUG:
+    60                      if str(exc):
+    61                          logger.debug('MiddlewareNotUsed(%r): %s', middleware_path, exc)
+    62                      else:
+    63                          logger.debug('MiddlewareNotUsed: %r', middleware_path)
+    64                  continue
+        
+    65              if mw_instance is None:
+    66                  raise ImproperlyConfigured(
+    67                      'Middleware factory %s returned None.' % middleware_path
+    68                  )
+        
+    69              if hasattr(mw_instance, 'process_view'):
+    70                  self._view_middleware.insert(
+    71                      0,
+    72                      self.adapt_method_mode(is_async, mw_instance.process_view),
+    73                  )
+    74              if hasattr(mw_instance, 'process_template_response'):
+    75                  self._template_response_middleware.append(
+    76                      self.adapt_method_mode(is_async, mw_instance.process_template_response),
+    77                  )
+    78              if hasattr(mw_instance, 'process_exception'):
+    79                  # The exception-handling stack is still always synchronous for
+    80                  # now, so adapt that way.
+    81                  self._exception_middleware.append(
+    82                      self.adapt_method_mode(False, mw_instance.process_exception),
+    83                  )
+        
+    84              handler = convert_exception_to_response(mw_instance)
+    85              handler_is_async = middleware_is_async
+        
+    86          # Adapt the top of the stack, if needed.
+    87          handler = self.adapt_method_mode(is_async, handler, handler_is_async)
+    88          # We only assign to this when initialization is complete as it is used
+    89          # as a flag for initialization being complete.
+    90          self._middleware_chain = handler
+        
+    91      def adapt_method_mode(
+    92          self, is_async, method, method_is_async=None, debug=False, name=None,
+    93      ):
+    94          """
+    95          Adapt a method to be in the correct "mode":
+    96          - If is_async is False:
+    97            - Synchronous methods are left alone
+    98            - Asynchronous methods are wrapped with async_to_sync
+    99          - If is_async is True:
+   100            - Synchronous methods are wrapped with sync_to_async()
+   101            - Asynchronous methods are left alone
+   102          """
+   103          if method_is_async is None:
+   104              method_is_async = asyncio.iscoroutinefunction(method)
+   105          if debug and not name:
+   106              name = name or 'method %s()' % method.__qualname__
+   107          if is_async:
+   108              if not method_is_async:
+   109                  if debug:
+   110                      logger.debug('Synchronous %s adapted.', name)
+   111                  return sync_to_async(method, thread_sensitive=True)
+   112          elif method_is_async:
+   113              if debug:
+   114                  logger.debug('Asynchronous %s adapted.', name)
+   115              return async_to_sync(method)
+   116          return method
+        
+   117      def get_response(self, request):
+   118          """Return an HttpResponse object for the given HttpRequest."""
+   119          # Setup default url resolver for this thread
+   120          set_urlconf(settings.ROOT_URLCONF)
+   121          response = self._middleware_chain(request)
+   122          response._resource_closers.append(request.close)
+   123          if response.status_code >= 400:
+   124              log_response(
+   125                  '%s: %s', response.reason_phrase, request.path,
+   126                  response=response,
+   127                  request=request,
+   128              )
+   129          return response
+        
+   130      async def get_response_async(self, request):
+   131          """
+   132          Asynchronous version of get_response.
+        
+   133          Funneling everything, including WSGI, into a single async
+   134          get_response() is too slow. Avoid the context switch by using
+   135          a separate async response path.
+   136          """
+   137          # Setup default url resolver for this thread.
+   138          set_urlconf(settings.ROOT_URLCONF)
+   139          response = await self._middleware_chain(request)
+   140          response._resource_closers.append(request.close)
+   141          if response.status_code >= 400:
+   142              await sync_to_async(log_response, thread_sensitive=False)(
+   143                  '%s: %s', response.reason_phrase, request.path,
+   144                  response=response,
+   145                  request=request,
+   146              )
+   147          return response
+        
+   148      def _get_response(self, request):
+   149          """
+   150          Resolve and call the view, then apply view, exception, and
+   151          template_response middleware. This method is everything that happens
+   152          inside the request/response middleware.
+   153          """
+   154          response = None
+   155          callback, callback_args, callback_kwargs = self.resolve_request(request)
+        
+   156          # Apply view middleware
+   157          for middleware_method in self._view_middleware:
+   158              response = middleware_method(request, callback, callback_args, callback_kwargs)
+   159              if response:
+   160                  break
+        
+   161          if response is None:
+   162              wrapped_callback = self.make_view_atomic(callback)
+   163              # If it is an asynchronous view, run it in a subthread.
+   164              if asyncio.iscoroutinefunction(wrapped_callback):
+   165                  wrapped_callback = async_to_sync(wrapped_callback)
+   166              try:
+   167                  response = wrapped_callback(request, *callback_args, **callback_kwargs)
+   168              except Exception as e:
+   169                  response = self.process_exception_by_middleware(e, request)
+   170                  if response is None:
+   171                      raise
+        
+   172          # Complain if the view returned None (a common error).
+   173          self.check_response(response, callback)
+        
+   174          # If the response supports deferred rendering, apply template
+   175          # response middleware and then render the response
+   176          if hasattr(response, 'render') and callable(response.render):
+   177              for middleware_method in self._template_response_middleware:
+   178                  response = middleware_method(request, response)
+   179                  # Complain if the template response middleware returned None (a common error).
+
+
+----------------------------
+|MESSAGE(role="assistant", id=31)|
+I will remove the leftover duplicated/ malformed try/except fragment (lines 56–64) introduced earlier to restore correct flow; this is a minimal deletion to fix the syntax error.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+from_line
+56
+----ARG----
+to_line
+64
+----ARG----
+content
+
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=32)|
+✓ Successfully replaced lines 56-64 in django/core/handlers/base.py. Replaced 9 lines with 1 lines (net change: -8 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 348 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+    56 - │                 mw_instance = middleware(adapted_handler)
+    56 + │  ⚠️INDENT
+    57 - │             except MiddlewareNotUsed as exc: (REMOVED)
+    58 - │                 if settings.DEBUG: (REMOVED)
+    59 - │                     if str(exc): (REMOVED)
+    60 - │                         logger.debug('MiddlewareNotUsed(%r):… (REMOVED)
+    61 - │                     else: (REMOVED)
+    62 - │                         logger.debug('MiddlewareNotUsed: %r'… (REMOVED)
+    63 - │                 continue (REMOVED)
+    64 - │                 ) (REMOVED)
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/core/handlers/base.py:
+✗ Syntax error in django/core/handlers/base.py:
+File "django/core/handlers/base.py", line 100
+    Adapt a method to be in the correct "mode":
+          ^
+SyntaxError: invalid syntax
+
+----------------------------
+|MESSAGE(role="assistant", id=33)|
+The file still has a syntax error in the adapt_method_mode docstring region; I'll open the exact lines around that function to inspect and plan a minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+86
+----ARG----
+end_line
+116
+----END_FUNCTION_CALL----</END_FUNCTION_CALL>----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=34)|
+sed: -e expression #1, char 7: unknown command: `
+'
+
+
+----------------------------
+|MESSAGE(role="assistant", id=35)|
+The file still has a syntax error near adapt_method_mode; I'll show the surrounding lines to inspect the docstring and nearby indentation before making a minimal fix.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+80
+----ARG----
+end_line
+116
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=36)|
+    80              if hasattr(mw_instance, 'process_exception'):
+    81                  # The exception-handling stack is still always synchronous for
+    82                  # now, so adapt that way.
+    83                  self._exception_middleware.append(
+    84                      self.adapt_method_mode(False, mw_instance.process_exception),
+    85                  )
+        
+    86              handler = convert_exception_to_response(mw_instance)
+    87              handler_is_async = middleware_is_async
+        
+    88          # Adapt the top of the stack, if needed.
+    89          handler = self.adapt_method_mode(is_async, handler, handler_is_async)
+    90          # We only assign to this when initialization is complete as it is used
+    91          # as a flag for initialization being complete.
+    92          self._middleware_chain = handler
+        
+    93      def adapt_method_mode(
+    94          self, is_async, method, method_is_async=None, debug=False, name=None,
+    95      ):
+    96          """
+    97          Adapt a method to be in the correct "mode":
+    98          - If is_async is False:
+    99            - Synchronous methods are left alone
+   100            - Asynchronous methods are wrapped with async_to_sync
+   101          - If is_async is True:
+   102            - Synchronous methods are wrapped with sync_to_async()
+   103            - Asynchronous methods are left alone
+   104          """
+   105          if method_is_async is None:
+   106              method_is_async = asyncio.iscoroutinefunction(method)
+   107          if debug and not name:
+   108              name = name or 'method %s()' % method.__qualname__
+   109          if is_async:
+   110              if not method_is_async:
+   111                  if debug:
+   112                      logger.debug('Synchronous %s adapted.', name)
+   113                  return sync_to_async(method, thread_sensitive=True)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=37)|
+I made a minimal change to adapt the handler into a local variable before calling the middleware factory to avoid MiddlewareNotUsed from overwriting the outer handler; I'll run the repository verification checks now.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=38)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 4
+   Lines deleted: 5
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+❌ CHECK 3 FAILED: Syntax errors detected
+   ✗ Syntax errors detected:
+
+django/core/handlers/base.py:
+✗ Syntax error in django/core/handlers/base.py:
+File "django/core/handlers/base.py", line 100
+    Adapt a method to be in the correct "mode":
+          ^
+SyntaxError: invalid syntax
+
+   FIX THESE ERRORS before calling finish()!
+⚠️  CHECK 4 WARNING: 1 file(s) have minor static analysis warnings
+   (Consider reviewing, but not blocking)
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/django/core/handlers/base.py b/django/core/handlers/base.py
+index 8e8c3da06a..91c447edaf 100644
+--- a/django/core/handlers/base.py
++++ b/django/core/handlers/base.py
+@@ -27,12 +27,10 @@ class BaseHandler:
+         """
+         Populate middleware lists from settings.MIDDLEWARE.
+ 
+-        Must be called after the environment is fixed (see __call__ in subclasses).
+-        """
+         self._view_middleware = []
+         self._template_response_middleware = []
+         self._exception_middleware = []
+-
++        
+         get_response = self._get_response_async if is_async else self._get_response
+         handler = convert_exception_to_response(get_response)
+         handler_is_async = is_async
+@@ -50,11 +48,12 @@ class BaseHandler:
+             else:
+                 middleware_is_async = middleware_can_async
+             try:
+-                # Adapt handler, if needed.
+-                handler = self.adapt_method_mode(
++                # Adapt handler into a local variable, if needed.
++                adapted_handler = self.adapt_method_mode(
+                     middleware_is_async, handler, handler_is_async,
+                     debug=settings.DEBUG, name='middleware %s' % middleware_path,
+                 )
++
+                 mw_instance = middleware(handler)
+             except MiddlewareNotUsed as exc:
+                 if settings.DEBUG:
+
+============================================================
+❌ VERIFICATION FAILED - DO NOT call finish() yet
+============================================================
+
+Fix the issues above, then run verify_before_finish() again.
+
+----------------------------
+|MESSAGE(role="assistant", id=39)|
+I need to inspect the load_middleware docstring and surrounding lines to find the missing/altered triple-quote and incorrect indentation so I can make a minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+start_line
+19
+----ARG----
+end_line
+36
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=40)|
+        
+    19  class BaseHandler:
+    20      _view_middleware = None
+    21      _template_response_middleware = None
+    22      _exception_middleware = None
+    23      _middleware_chain = None
+        
+    24      def load_middleware(self, is_async=False):
+    25          """
+    26          Populate middleware lists from settings.MIDDLEWARE.
+        
+    27          self._view_middleware = []
+    28          self._template_response_middleware = []
+    29          self._exception_middleware = []
+    30          
+    31          get_response = self._get_response_async if is_async else self._get_response
+    32          handler = convert_exception_to_response(get_response)
+    33          handler_is_async = is_async
+
+
+----------------------------
+|MESSAGE(role="assistant", id=41)|
+The docstring and initial lines of load_middleware were accidentally removed/indented; I'll restore the original docstring and the initial setup lines (minimal fix) so the file parses correctly.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/core/handlers/base.py
+----ARG----
+from_line
+24
+----ARG----
+to_line
+33
+----ARG----
+content
+    def load_middleware(self, is_async=False):
+        """
+        Populate middleware lists from settings.MIDDLEWARE.
+
+        Must be called after the environment is fixed (see __call__ in subclasses).
+        """
+        self._view_middleware = []
+        self._template_response_middleware = []
+        self._exception_middleware = []
+        
+        get_response = self._get_response_async if is_async else self._get_response
+        handler = convert_exception_to_response(get_response)
+        handler_is_async = is_async
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=42)|
+✓ Successfully replaced lines 24-33 in django/core/handlers/base.py. Replaced 10 lines with 13 lines (net change: +3 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 351 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+    24 - │     _middleware_chain = None
+    24 + │     def load_middleware(self, is_async=False): 
+    25 - │ 
+    25 + │         """ ⚠️INDENT
+    26 - │     def load_middleware(self, is_async=False):
+    26 + │         Populate middleware lists from settings.MIDDLEWARE. ⚠️INDENT
+    27 - │         """
+    27 + │  ⚠️INDENT
+    28 - │         Populate middleware lists from settings.MIDDLEWARE.
+    28 + │         Must be called after the environment is fixed (see _… 
+    29 - │ 
+    29 + │         """ ⚠️INDENT
+    30   │         self._view_middleware = []
+    31   │         self._template_response_middleware = []
+    32   │         self._exception_middleware = []
+    33   │         
+    34 + │         get_response = self._get_response_async if is_async … (ADDED) ⚠️INDENT
+    35 + │         handler = convert_exception_to_response(get_response… (ADDED) ⚠️INDENT
+    36 + │         handler_is_async = is_async (ADDED) ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+----------------------------
+|MESSAGE(role="assistant", id=43)|
+The file was partially repaired; I'll run the full pre-finish verification to surface any remaining syntax or verification issues.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----ARG----
+ 
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=44)|
+Error parsing function call: Error parsing response: Argument 1 is malformed: missing argument name. You must ensure that you make a function call at the end of your response.
+
+Your response must strictly follow this format:
+```
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+```
+
+----------------------------
+|MESSAGE(role="assistant", id=45)|
+I will run verify_before_finish again to check for remaining syntax or verification issues after the recent fixes.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=46)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 7
+   Lines deleted: 5
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+⚠️  CHECK 4 WARNING: 1 file(s) have minor static analysis warnings
+   (Consider reviewing, but not blocking)
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/django/core/handlers/base.py b/django/core/handlers/base.py
+index 8e8c3da06a..5ba5ff572c 100644
+--- a/django/core/handlers/base.py
++++ b/django/core/handlers/base.py
+@@ -21,8 +21,6 @@ class BaseHandler:
+     _view_middleware = None
+     _template_response_middleware = None
+     _exception_middleware = None
+-    _middleware_chain = None
+-
+     def load_middleware(self, is_async=False):
+         """
+         Populate middleware lists from settings.MIDDLEWARE.
+@@ -32,7 +30,10 @@ class BaseHandler:
+         self._view_middleware = []
+         self._template_response_middleware = []
+         self._exception_middleware = []
+-
++        
++        get_response = self._get_response_async if is_async else self._get_response
++        handler = convert_exception_to_response(get_response)
++        handler_is_async = is_async
+         get_response = self._get_response_async if is_async else self._get_response
+         handler = convert_exception_to_response(get_response)
+         handler_is_async = is_async
+@@ -50,11 +51,12 @@ class BaseHandler:
+             else:
+                 middleware_is_async = middleware_can_async
+             try:
+-                # Adapt handler, if needed.
+-                handler = self.adapt_method_mode(
++                # Adapt handler into a local variable, if needed.
++                adapted_handler = self.adapt_method_mode(
+                     middleware_is_async, handler, handler_is_async,
+                     debug=settings.DEBUG, name='middleware %s' % middleware_path,
+                 )
++
+                 mw_instance = middleware(handler)
+             except MiddlewareNotUsed as exc:
+                 if settings.DEBUG:
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+

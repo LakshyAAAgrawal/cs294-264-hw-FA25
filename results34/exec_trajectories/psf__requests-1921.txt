@@ -1,0 +1,1415 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+CRITICAL: Before deleting lines, verify they don't contain variable definitions, imports, or function/class definitions that are used elsewhere. Deleting such lines causes runtime errors even if syntax is valid.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Checks for critical semantic errors (undefined names, etc.)
+5. Shows git diff preview of all changes
+6. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+Removing a default header of a session
+[The docs](http://docs.python-requests.org/en/latest/user/advanced/#session-objects) say that you can prevent sending a session header by setting the headers value to None in the method's arguments. You would expect (as [discussed on IRC](https://botbot.me/freenode/python-requests/msg/10788170/)) that this would work for session's default headers, too:
+
+``` python
+session = requests.Session()
+# Do not send Accept-Encoding
+session.headers['Accept-Encoding'] = None
+```
+
+What happens is that "None"  gets sent as the value of header.
+
+```
+Accept-Encoding: None
+```
+
+For the reference, here is a way that works:
+
+``` python
+del session.headers['Accept-Encoding']
+```
+
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+Setting session.headers['Accept-Encoding'] = None results in the literal string "None" being sent because Requests coerces header values to strings; to avoid sending a header you must remove it (or send a per-request headers dict that omits it). Below are minimal, safe options and short explanations.
+
+----BEGIN_FUNCTION_CALL----
+finish
+----ARG----
+result
+Setting session.headers['Accept-Encoding'] = None will send the header "Accept-Encoding: None" because Requests/cooperative libraries coerce header values to strings. To avoid sending the header, remove it from the session headers or send a per-request header dict that omits it.
+
+Minimal fixes:
+- Remove permanently from the session:
+    del session.headers['Accept-Encoding']
+  or
+    session.headers.pop('Accept-Encoding', None)
+
+- Remove for a single request (leave session defaults intact):
+    headers = session.headers.copy()
+    headers.pop('Accept-Encoding', None)
+    resp = session.get(url, headers=headers)
+
+- Clean-up any None-valued headers from the session in one go:
+    session.headers = {k: v for k, v in session.headers.items() if v is not None}
+
+Explanation:
+Requests will not treat Python None as "do not send"; it becomes the string "None" when sent in HTTP. The correct approach is to delete/pop the header so it is absent from the final request headers.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+Cannot finish() - verification checks failed. Fix the issues below:
+
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+❌ CHECK 1 FAILED: No code changes detected
+   You have not modified any files.
+   DO NOT call finish() - make code changes first!
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll inspect the repository root to find the relevant files to modify (likely docs or a tests/example) so I can make a minimal change and run verification. 
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+total 140
+drwxrwxrwx 1 root root  4096 Sep 10 14:59 .
+drwxr-xr-x 1 root root  4096 Oct  5 01:03 ..
+drwxrwxrwx 1 root root  4096 Oct  5 01:04 .git
+-rw-r--r-- 1 root root   203 Sep 10 14:59 .gitignore
+-rw-r--r-- 1 root root  3564 Sep 10 14:59 AUTHORS.rst
+-rw-r--r-- 1 root root 20576 Sep 10 14:59 HISTORY.rst
+-rw-r--r-- 1 root root   581 Sep 10 14:59 LICENSE
+-rw-r--r-- 1 root root   100 Sep 10 14:59 MANIFEST.in
+-rw-r--r-- 1 root root   913 Sep 10 14:59 Makefile
+-rw-r--r-- 1 root root  2795 Sep 10 14:59 NOTICE
+-rw-r--r-- 1 root root  3050 Sep 10 14:59 README.rst
+drwxr-xr-x 4 root root  4096 Sep 10 14:59 build
+drwxrwxrwx 8 root root  4096 Sep 10 14:59 docs
+drwxrwxrwx 2 root root  4096 Sep 10 14:59 ext
+drwxr-xr-x 4 root root  4096 Sep 10 14:59 requests
+drwxr-xr-x 2 root root  4096 Sep 10 14:59 requests.egg-info
+-rw-r--r-- 1 root root    61 Sep 10 14:59 requirements.txt
+-rw-r--r-- 1 root root    22 Sep 10 14:59 setup.cfg
+-rwxr-xr-x 1 root root  1602 Sep 10 14:59 setup.py
+-rwxr-xr-x 1 root root 40990 Sep 10 14:59 test_requests.py
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll search the codebase for header-preparation logic (functions like prepare_headers or places that coerce header values) to locate where None values are turned into the string "None". 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+prepare_headers
+----ARG----
+directory
+.
+----ARG----
+use_regex
+false
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+./build/lib/requests/models.py:295:        self.prepare_headers(headers)
+./build/lib/requests/models.py:390:    def prepare_headers(self, headers):
+./requests/models.py:295:        self.prepare_headers(headers)
+./requests/models.py:390:    def prepare_headers(self, headers):
+grep: ./requests/__pycache__/models.cpython-39.pyc: binary file matches
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I'll open the prepare_headers implementation in requests/models.py to inspect how header values (including None) are handled.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+360
+----ARG----
+end_line
+420
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···360          netloc += host
+···361          if port:
+···362              netloc += ':' + str(port)
+········
+···363          # Bare domains aren't valid URLs.
+···364          if not path:
+···365              path = '/'
+········
+···366          if is_py2:
+···367              if isinstance(scheme, str):
+···368                  scheme = scheme.encode('utf-8')
+···369              if isinstance(netloc, str):
+···370                  netloc = netloc.encode('utf-8')
+···371              if isinstance(path, str):
+···372                  path = path.encode('utf-8')
+···373              if isinstance(query, str):
+···374                  query = query.encode('utf-8')
+···375              if isinstance(fragment, str):
+···376                  fragment = fragment.encode('utf-8')
+········
+···377          enc_params = self._encode_params(params)
+···378          if enc_params:
+···379              if query:
+···380                  query = '%s&%s' % (query, enc_params)
+···381              else:
+···382                  query = enc_params
+········
+···383          url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))
+···384          self.url = url
+········
+···385      def prepare_headers(self, headers):
+···386          """Prepares the given HTTP headers."""
+········
+···387          if headers:
+···388              self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
+···389          else:
+···390              self.headers = CaseInsensitiveDict()
+········
+···391      def prepare_body(self, data, files):
+···392          """Prepares the given HTTP body data."""
+········
+···393          # Check if file, fo, generator, iterator.
+···394          # If not, run through normal process.
+········
+···395          # Nottin' on you.
+···396          body = None
+···397          content_type = None
+···398          length = None
+········
+···399          is_stream = all([
+···400              hasattr(data, '__iter__'),
+···401              not isinstance(data, basestring),
+···402              not isinstance(data, list),
+···403              not isinstance(data, dict)
+···404          ])
+········
+···405          try:
+···406              length = super_len(data)
+···407          except (TypeError, AttributeError, UnsupportedOperation):
+···408              length = None
+········
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll detect the file's indentation to ensure any edit preserves spacing before I make the minimal change to skip None-valued headers in prepare_headers.
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+requests/models.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I will make a minimal edit to prepare_headers to skip headers with None values so they are not sent as the string "None". I'll replace the current method body with a version that filters out None-valued headers.
+
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+from_line
+385
+----ARG----
+to_line
+390
+----ARG----
+content
+    def prepare_headers(self, headers):
+        """Prepares the given HTTP headers."""
+
+        if headers:
+            self.headers = CaseInsensitiveDict(
+                (to_native_string(name), value)
+                for name, value in headers.items()
+                if value is not None
+            )
+        else:
+            self.headers = CaseInsensitiveDict()
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+✓ Successfully replaced lines 385-390 in requests/models.py. Replaced 6 lines with 11 lines (net change: +5 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 806 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   385 - │                 query = enc_params
+   385 + │     def prepare_headers(self, headers): ⚠️INDENT
+   386 - │ 
+   386 + │         """Prepares the given HTTP headers.""" ⚠️INDENT
+   387 - │         url = requote_uri(urlunparse([scheme, netloc, path, …
+   387 + │  ⚠️INDENT
+   388 - │         self.url = url
+   388 + │         if headers: 
+   389 - │ 
+   389 + │             self.headers = CaseInsensitiveDict( ⚠️INDENT
+   390 - │     def prepare_headers(self, headers):
+   390 + │                 (to_native_string(name), value) ⚠️INDENT
+   391 + │                 for name, value in headers.items() (ADDED) ⚠️INDENT
+   392 + │                 if value is not None (ADDED) ⚠️INDENT
+   393 + │             ) (ADDED) ⚠️INDENT
+   394 + │         else: (ADDED) ⚠️INDENT
+   395 + │             self.headers = CaseInsensitiveDict() (ADDED) ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in requests/models.py:
+✗ Syntax error in requests/models.py:
+Sorry: IndentationError: expected an indented block (models.py, line 385)
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+The recent replace introduced an indentation/syntax error; I'll display the surrounding lines to inspect exact indentation and fix it with a minimal change. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+380
+----ARG----
+end_line
+400
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···380          enc_params = self._encode_params(params)
+···381          if enc_params:
+···382              if query:
+···383                  query = '%s&%s' % (query, enc_params)
+···384              else:
+···385      def prepare_headers(self, headers):
+···386          """Prepares the given HTTP headers."""
+········
+···387          if headers:
+···388              self.headers = CaseInsensitiveDict(
+···389                  (to_native_string(name), value)
+···390                  for name, value in headers.items()
+···391                  if value is not None
+···392              )
+···393          else:
+···394              self.headers = CaseInsensitiveDict()
+···395          """Prepares the given HTTP headers."""
+········
+···396          if headers:
+···397              self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
+···398          else:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+The new prepare_headers replacement introduced an indentation mismatch and duplicated the old method; I'll re-open a larger region to inspect surrounding indentation and the original method so I can make a minimal, correctly-indented fix. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+340
+----ARG----
+end_line
+420
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···340          # Support for unicode domain names and paths.
+···341          scheme, auth, host, port, path, query, fragment = parse_url(url)
+········
+···342          if not scheme:
+···343              raise MissingSchema("Invalid URL {0!r}: No schema supplied. "
+···344                                  "Perhaps you meant http://{0}?".format(url))
+········
+···345          if not host:
+···346              raise InvalidURL("Invalid URL %r: No host supplied" % url)
+········
+···347          # Only want to apply IDNA to the hostname
+···348          try:
+···349              host = host.encode('idna').decode('utf-8')
+···350          except UnicodeError:
+···351              raise InvalidURL('URL has an invalid label.')
+········
+···352          # Carefully reconstruct the network location
+···353          netloc = auth or ''
+···354          if netloc:
+···355              netloc += '@'
+···356          netloc += host
+···357          if port:
+···358              netloc += ':' + str(port)
+········
+···359          # Bare domains aren't valid URLs.
+···360          if not path:
+···361              path = '/'
+········
+···362          if is_py2:
+···363              if isinstance(scheme, str):
+···364                  scheme = scheme.encode('utf-8')
+···365              if isinstance(netloc, str):
+···366                  netloc = netloc.encode('utf-8')
+···367              if isinstance(path, str):
+···368                  path = path.encode('utf-8')
+···369              if isinstance(query, str):
+···370                  query = query.encode('utf-8')
+···371              if isinstance(fragment, str):
+···372                  fragment = fragment.encode('utf-8')
+········
+···373          enc_params = self._encode_params(params)
+···374          if enc_params:
+···375              if query:
+···376                  query = '%s&%s' % (query, enc_params)
+···377              else:
+···378      def prepare_headers(self, headers):
+···379          """Prepares the given HTTP headers."""
+········
+···380          if headers:
+···381              self.headers = CaseInsensitiveDict(
+···382                  (to_native_string(name), value)
+···383                  for name, value in headers.items()
+···384                  if value is not None
+···385              )
+···386          else:
+···387              self.headers = CaseInsensitiveDict()
+···388          """Prepares the given HTTP headers."""
+········
+···389          if headers:
+···390              self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
+···391          else:
+···392              self.headers = CaseInsensitiveDict()
+········
+···393      def prepare_body(self, data, files):
+···394          """Prepares the given HTTP body data."""
+········
+···395          # Check if file, fo, generator, iterator.
+···396          # If not, run through normal process.
+········
+···397          # Nottin' on you.
+···398          body = None
+···399          content_type = None
+···400          length = None
+········
+···401          is_stream = all([
+···402              hasattr(data, '__iter__'),
+···403              not isinstance(data, basestring),
+···404              not isinstance(data, list),
+···405              not isinstance(data, dict)
+···406          ])
+········
+
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+I'll remove the duplicated old prepare_headers block (lines 389-394) that caused the syntax/indentation error so only the new None-filtering implementation remains.
+
+----BEGIN_FUNCTION_CALL----
+delete_lines
+----ARG----
+file_path
+requests/models.py
+----ARG----
+from_line
+389
+----ARG----
+to_line
+394
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+Successfully deleted lines 389-394 in requests/models.py
+
+Warning: syntax errors detected in requests/models.py:
+✗ Syntax error in requests/models.py:
+Sorry: IndentationError: expected an indented block (models.py, line 385)
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+The file still has an indentation/syntax error around the new prepare_headers; I'll display the surrounding lines to inspect exact indentation and fix it next. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+372
+----ARG----
+end_line
+392
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···372                  netloc = netloc.encode('utf-8')
+···373              if isinstance(path, str):
+···374                  path = path.encode('utf-8')
+···375              if isinstance(query, str):
+···376                  query = query.encode('utf-8')
+···377              if isinstance(fragment, str):
+···378                  fragment = fragment.encode('utf-8')
+········
+···379          enc_params = self._encode_params(params)
+···380          if enc_params:
+···381              if query:
+···382                  query = '%s&%s' % (query, enc_params)
+···383              else:
+···384      def prepare_headers(self, headers):
+···385          """Prepares the given HTTP headers."""
+········
+···386          if headers:
+···387              self.headers = CaseInsensitiveDict()
+···388          """Prepares the given HTTP headers."""
+········
+···389          if headers:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=23)|
+I will insert the missing lines that restore the end of the enc_params block (setting query when no prior query) and then restore url/self.url before the prepare_headers definition to fix the IndentationError.  
+----BEGIN_FUNCTION_CALL----
+insert_lines_at
+----ARG----
+file_path
+requests/models.py
+----ARG----
+line_num
+384
+----ARG----
+content
+                query = enc_params
+        url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))
+        self.url = url
+
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=24)|
+Successfully inserted content at line 384 in requests/models.py
+
+Warning: syntax errors detected in requests/models.py:
+✗ Syntax error in requests/models.py:
+Sorry: IndentationError: unexpected indent (models.py, line 384)
+
+----------------------------
+|MESSAGE(role="assistant", id=25)|
+I need to inspect the surrounding lines to locate the unexpected indent and determine the minimal fix. I'll display the file region around the current error with whitespace highlighted.
+
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+376
+----ARG----
+end_line
+396
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=26)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···376                  query = query.encode('utf-8')
+···377              if isinstance(fragment, str):
+···378                  fragment = fragment.encode('utf-8')
+········
+···379          enc_params = self._encode_params(params)
+···380          if enc_params:
+···381              if query:
+···382                  query = '%s&%s' % (query, enc_params)
+···383                                  query = enc_params
+···384                          url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))
+···385                          self.url = url
+···386              else:
+···387      def prepare_headers(self, headers):
+···388          """Prepares the given HTTP headers."""
+········
+···389          if headers:
+···390              self.headers = CaseInsensitiveDict()
+···391          """Prepares the given HTTP headers."""
+········
+···392          if headers:
+···393              self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
+
+
+----------------------------
+|MESSAGE(role="assistant", id=27)|
+The enc_params/url block was mis-indented during prior edits; I'll replace that small region to restore correct indentation and re-align the following prepare_headers definition.
+
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+from_line
+379
+----ARG----
+to_line
+386
+----ARG----
+content
+        enc_params = self._encode_params(params)
+        if enc_params:
+            if query:
+                query = '%s&%s' % (query, enc_params)
+            else:
+                query = enc_params
+        url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))
+        self.url = url
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=28)|
+✓ Successfully replaced lines 379-386 in requests/models.py. Replaced 8 lines with 8 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 803 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   379 - │ 
+   379 + │         enc_params = self._encode_params(params) ⚠️INDENT
+   380 - │         enc_params = self._encode_params(params)
+   380 + │         if enc_params: 
+   381 - │         if enc_params:
+   381 + │             if query: ⚠️INDENT
+   382 - │             if query:
+   382 + │                 query = '%s&%s' % (query, enc_params) ⚠️INDENT
+   383 - │                 query = '%s&%s' % (query, enc_params)
+   383 + │             else: ⚠️INDENT
+   384 - │                                 query = enc_params
+   384 + │                 query = enc_params ⚠️INDENT
+   385 - │                         url = requote_uri(urlunparse([scheme…
+   385 + │         url = requote_uri(urlunparse([scheme, netloc, path, … ⚠️INDENT
+   386 - │                         self.url = url
+   386 + │         self.url = url ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in requests/models.py:
+✗ Syntax error in requests/models.py:
+Sorry: IndentationError: unexpected indent (models.py, line 387)
+
+----------------------------
+|MESSAGE(role="assistant", id=29)|
+I will inspect the lines around the reported unexpected indent at 387 to determine the minimal fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+384
+----ARG----
+end_line
+396
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=30)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···384                  query = enc_params
+···385          url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))
+···386          self.url = url
+···387              else:
+···388      def prepare_headers(self, headers):
+···389          """Prepares the given HTTP headers."""
+········
+···390          if headers:
+···391              self.headers = CaseInsensitiveDict()
+···392          """Prepares the given HTTP headers."""
+········
+···393          if headers:
+···394              self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
+
+
+----------------------------
+|MESSAGE(role="assistant", id=31)|
+I will remove the stray/dangling lines and replace the duplicated/misaligned prepare_headers region with a single correctly indented implementation that filters out None-valued headers.  
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+from_line
+387
+----ARG----
+to_line
+396
+----ARG----
+content
+    def prepare_headers(self, headers):
+        """Prepares the given HTTP headers."""
+
+        if headers:
+            self.headers = CaseInsensitiveDict(
+                (to_native_string(name), value)
+                for name, value in headers.items()
+                if value is not None
+            )
+        else:
+            self.headers = CaseInsensitiveDict()
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=32)|
+✓ Successfully replaced lines 387-396 in requests/models.py. Replaced 10 lines with 11 lines (net change: +1 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 804 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   387 - │             else:
+   387 + │     def prepare_headers(self, headers): ⚠️INDENT
+   388 - │     def prepare_headers(self, headers):
+   388 + │         """Prepares the given HTTP headers.""" ⚠️INDENT
+   389 - │         """Prepares the given HTTP headers."""
+   389 + │  ⚠️INDENT
+   390 - │ 
+   390 + │         if headers: ⚠️INDENT
+   391 - │         if headers:
+   391 + │             self.headers = CaseInsensitiveDict( ⚠️INDENT
+   392 - │             self.headers = CaseInsensitiveDict()
+   392 + │                 (to_native_string(name), value) ⚠️INDENT
+   393 - │         """Prepares the given HTTP headers."""
+   393 + │                 for name, value in headers.items() ⚠️INDENT
+   394 - │ 
+   394 + │                 if value is not None ⚠️INDENT
+   395 - │         if headers:
+   395 + │             ) ⚠️INDENT
+   396 - │             self.headers = CaseInsensitiveDict((to_native_st…
+   396 + │         else: ⚠️INDENT
+   397 + │             self.headers = CaseInsensitiveDict() (ADDED) ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in requests/models.py:
+✗ Syntax error in requests/models.py:
+File "requests/models.py", line 398
+    else:
+    ^
+SyntaxError: invalid syntax
+
+----------------------------
+|MESSAGE(role="assistant", id=33)|
+There's still a SyntaxError around the prepare_headers area; I'll display a slightly larger region with whitespace highlighted to locate the invalid/duplicate lines to fix minimally.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+372
+----ARG----
+end_line
+412
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=34)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···372                  netloc = netloc.encode('utf-8')
+···373              if isinstance(path, str):
+···374                  path = path.encode('utf-8')
+···375              if isinstance(query, str):
+···376                  query = query.encode('utf-8')
+···377              if isinstance(fragment, str):
+···378                  fragment = fragment.encode('utf-8')
+···379          enc_params = self._encode_params(params)
+···380          if enc_params:
+···381              if query:
+···382                  query = '%s&%s' % (query, enc_params)
+···383              else:
+···384                  query = enc_params
+···385          url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))
+···386          self.url = url
+···387      def prepare_headers(self, headers):
+···388          """Prepares the given HTTP headers."""
+········
+···389          if headers:
+···390              self.headers = CaseInsensitiveDict(
+···391                  (to_native_string(name), value)
+···392                  for name, value in headers.items()
+···393                  if value is not None
+···394              )
+···395          else:
+···396              self.headers = CaseInsensitiveDict()
+···397          else:
+···398              self.headers = CaseInsensitiveDict()
+········
+···399      def prepare_body(self, data, files):
+···400          """Prepares the given HTTP body data."""
+········
+···401          # Check if file, fo, generator, iterator.
+···402          # If not, run through normal process.
+········
+···403          # Nottin' on you.
+···404          body = None
+···405          content_type = None
+···406          length = None
+········
+···407          is_stream = all([
+
+
+----------------------------
+|MESSAGE(role="assistant", id=35)|
+I'll remove the duplicated stray "else:" block (lines 397-398) that introduced the syntax error so the prepare_headers method is the only valid implementation in that region.
+----BEGIN_FUNCTION_CALL----
+delete_lines
+----ARG----
+file_path
+requests/models.py
+----ARG----
+from_line
+397
+----ARG----
+to_line
+398
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=36)|
+Successfully deleted lines 397-398 in requests/models.py
+
+----------------------------
+|MESSAGE(role="assistant", id=37)|
+I'll run the comprehensive verification (syntax, git diff, and checks) to ensure the recent edits fixed the issue and it's safe to finish.
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=38)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 5
+   Lines deleted: 4
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+✅ CHECK 4 PASSED: No semantic errors detected in Python files
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/requests/models.py b/requests/models.py
+index cd232e6..1565cf6 100644
+--- a/requests/models.py
++++ b/requests/models.py
+@@ -376,22 +376,23 @@ class PreparedRequest(RequestEncodingMixin, RequestHooksMixin):
+                 query = query.encode('utf-8')
+             if isinstance(fragment, str):
+                 fragment = fragment.encode('utf-8')
+-
+         enc_params = self._encode_params(params)
+         if enc_params:
+             if query:
+                 query = '%s&%s' % (query, enc_params)
+             else:
+                 query = enc_params
+-
+         url = requote_uri(urlunparse([scheme, netloc, path, None, query, fragment]))
+         self.url = url
+-
+     def prepare_headers(self, headers):
+         """Prepares the given HTTP headers."""
+ 
+         if headers:
+-            self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
++            self.headers = CaseInsensitiveDict(
++                (to_native_string(name), value)
++                for name, value in headers.items()
++                if value is not None
++            )
+         else:
+             self.headers = CaseInsensitiveDict()
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+
