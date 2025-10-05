@@ -1,0 +1,999 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+CRITICAL: Before deleting lines, verify they don't contain variable definitions, imports, or function/class definitions that are used elsewhere. Deleting such lines causes runtime errors even if syntax is valid.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Checks for critical semantic errors (undefined names, etc.)
+5. Shows git diff preview of all changes
+6. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+Request with binary payload fails due to calling to_native_string
+Introduced with https://github.com/kennethreitz/requests/issues/2844
+
+```
+import requests
+requests.put("http://httpbin.org/put", data=u"ööö".encode("utf-8"))
+```
+
+This works with 2.8.1, but not with 2.9.
+
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll inspect the repository root to locate the requests code and relevant tests so I can reproduce and fix the to_native_string binary payload issue. 
+----BEGIN_FUNCTION_CALL----
+list_files
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+total 172
+drwxrwxrwx 1 root root  4096 Sep 10 14:59 .
+drwxr-xr-x 1 root root  4096 Oct  4 23:51 ..
+drwxrwxrwx 8 root root  4096 Sep 10 14:59 .git
+-rw-r--r-- 1 root root   208 Sep 10 14:59 .gitignore
+-rw-r--r-- 1 root root  5724 Sep 10 14:59 AUTHORS.rst
+-rw-r--r-- 1 root root  3010 Sep 10 14:59 CONTRIBUTING.md
+-rw-r--r-- 1 root root 32595 Sep 10 14:59 HISTORY.rst
+-rw-r--r-- 1 root root   581 Sep 10 14:59 LICENSE
+-rw-r--r-- 1 root root   100 Sep 10 14:59 MANIFEST.in
+-rw-r--r-- 1 root root  1084 Sep 10 14:59 Makefile
+-rw-r--r-- 1 root root  2292 Sep 10 14:59 NOTICE
+-rw-r--r-- 1 root root  2748 Sep 10 14:59 README.rst
+drwxr-xr-x 4 root root  4096 Sep 10 14:59 build
+drwxrwxrwx 8 root root  4096 Sep 10 14:59 docs
+drwxrwxrwx 2 root root  4096 Sep 10 14:59 ext
+drwxr-xr-x 3 root root  4096 Sep 10 14:59 requests
+drwxr-xr-x 2 root root  4096 Sep 10 14:59 requests.egg-info
+-rw-r--r-- 1 root root    86 Sep 10 14:59 requirements.txt
+-rw-r--r-- 1 root root    22 Sep 10 14:59 setup.cfg
+-rwxr-xr-x 1 root root  2080 Sep 10 14:59 setup.py
+-rwxr-xr-x 1 root root 60514 Sep 10 14:59 test_requests.py
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll search the codebase for usages of to_native_string and related helpers to find where binary payloads might be converted incorrectly. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+to_native_string
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+./build/lib/requests/utils.py:686:def to_native_string(string, encoding='ascii'):
+./build/lib/requests/auth.py:20:from .utils import parse_dict_header, to_native_string
+./build/lib/requests/auth.py:30:    authstr = 'Basic ' + to_native_string(
+./build/lib/requests/models.py:30:    iter_slices, guess_json_utf, super_len, to_native_string)
+./build/lib/requests/models.py:84:            return to_native_string(data)
+./build/lib/requests/models.py:322:            self.method = to_native_string(self.method.upper())
+./build/lib/requests/models.py:351:            error = error.format(to_native_string(url, 'utf8'))
+./build/lib/requests/models.py:402:            self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
+./build/lib/requests/sessions.py:21:from .utils import to_key_val_list, default_headers, to_native_string
+./build/lib/requests/sessions.py:138:            prepared_request.url = to_native_string(url)
+./requests/utils.py:686:def to_native_string(string, encoding='ascii'):
+./requests/auth.py:20:from .utils import parse_dict_header, to_native_string
+./requests/auth.py:30:    authstr = 'Basic ' + to_native_string(
+./requests/models.py:30:    iter_slices, guess_json_utf, super_len, to_native_string)
+./requests/models.py:84:            return to_native_string(data)
+./requests/models.py:322:            self.method = to_native_string(self.method.upper())
+./requests/models.py:351:            error = error.format(to_native_string(url, 'utf8'))
+./requests/models.py:402:            self.headers = CaseInsensitiveDict((to_native_string(name), value) for name, value in headers.items())
+./requests/sessions.py:21:from .utils import to_key_val_list, default_headers, to_native_string
+./requests/sessions.py:138:            prepared_request.url = to_native_string(url)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll open requests/utils.py around the to_native_string implementation to inspect how it handles binary input and encoding.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/utils.py
+----ARG----
+start_line
+660
+----ARG----
+end_line
+720
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···660      '''Given a URL that may or may not have a scheme, prepend the given scheme.
+···661      Does not replace a present scheme with the one provided as an argument.'''
+···662      scheme, netloc, path, params, query, fragment = urlparse(url, new_scheme)
+········
+···663      # urlparse is a finicky beast, and sometimes decides that there isn't a
+···664      # netloc present. Assume that it's being over-cautious, and switch netloc
+···665      # and path if urlparse decided there was no netloc.
+···666      if not netloc:
+···667          netloc, path = path, netloc
+········
+···668      return urlunparse((scheme, netloc, path, params, query, fragment))
+········
+········
+···669  def get_auth_from_url(url):
+···670      """Given a url with authentication components, extract them into a tuple of
+···671      username,password."""
+···672      parsed = urlparse(url)
+········
+···673      try:
+···674          auth = (unquote(parsed.username), unquote(parsed.password))
+···675      except (AttributeError, TypeError):
+···676          auth = ('', '')
+········
+···677      return auth
+········
+········
+···678  def to_native_string(string, encoding='ascii'):
+···679      """
+···680      Given a string object, regardless of type, returns a representation of that
+···681      string in the native string type, encoding and decoding where necessary.
+···682      This assumes ASCII unless told otherwise.
+···683      """
+···684      out = None
+········
+···685      if isinstance(string, builtin_str):
+···686          out = string
+···687      else:
+···688          if is_py2:
+···689              out = string.encode(encoding)
+···690          else:
+···691              out = string.decode(encoding)
+········
+···692      return out
+········
+········
+···693  def urldefragauth(url):
+···694      """
+···695      Given a url remove the fragment and the authentication part
+···696      """
+···697      scheme, netloc, path, params, query, fragment = urlparse(url)
+········
+···698      # see func:`prepend_scheme_if_needed`
+···699      if not netloc:
+···700          netloc, path = path, netloc
+········
+···701      netloc = netloc.rsplit('@', 1)[-1]
+········
+···702      return urlunparse((scheme, netloc, path, params, query, ''))
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+The to_native_string call is being applied to request body data (bytes) with a default 'ascii' encoding — that causes decode errors for UTF-8 payloads. I'll inspect the models where data is converted to locate the minimal change (use 'utf-8' when decoding binary payloads instead of defaulting to ascii). 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/models.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+140
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+·····1  # -*- coding: utf-8 -*-
+········
+·····2  """
+·····3  requests.models
+·····4  ~~~~~~~~~~~~~~~
+········
+·····5  This module contains the primary objects that power Requests.
+·····6  """
+········
+·····7  import collections
+·····8  import datetime
+········
+·····9  from io import BytesIO, UnsupportedOperation
+····10  from .hooks import default_hooks
+····11  from .structures import CaseInsensitiveDict
+········
+····12  from .auth import HTTPBasicAuth
+····13  from .cookies import cookiejar_from_dict, get_cookie_header, _copy_cookie_jar
+····14  from .packages.urllib3.fields import RequestField
+····15  from .packages.urllib3.filepost import encode_multipart_formdata
+····16  from .packages.urllib3.util import parse_url
+····17  from .packages.urllib3.exceptions import (
+····18      DecodeError, ReadTimeoutError, ProtocolError, LocationParseError)
+····19  from .exceptions import (
+····20      HTTPError, MissingSchema, InvalidURL, ChunkedEncodingError,
+····21      ContentDecodingError, ConnectionError, StreamConsumedError)
+····22  from .utils import (
+····23      guess_filename, get_auth_from_url, requote_uri,
+····24      stream_decode_response_unicode, to_key_val_list, parse_header_links,
+····25      iter_slices, guess_json_utf, super_len, to_native_string)
+····26  from .compat import (
+····27      cookielib, urlunparse, urlsplit, urlencode, str, bytes, StringIO,
+····28      is_py2, chardet, builtin_str, basestring)
+····29  from .compat import json as complexjson
+····30  from .status_codes import codes
+········
+····31  #: The set of HTTP status codes that indicate an automatically
+····32  #: processable redirect.
+····33  REDIRECT_STATI = (
+····34      codes.moved,              # 301
+····35      codes.found,              # 302
+····36      codes.other,              # 303
+····37      codes.temporary_redirect, # 307
+····38      codes.permanent_redirect, # 308
+····39  )
+········
+····40  DEFAULT_REDIRECT_LIMIT = 30
+····41  CONTENT_CHUNK_SIZE = 10 * 1024
+····42  ITER_CHUNK_SIZE = 512
+········
+········
+····43  class RequestEncodingMixin(object):
+····44      @property
+····45      def path_url(self):
+····46          """Build the path URL to use."""
+········
+····47          url = []
+········
+····48          p = urlsplit(self.url)
+········
+····49          path = p.path
+····50          if not path:
+····51              path = '/'
+········
+····52          url.append(path)
+········
+····53          query = p.query
+····54          if query:
+····55              url.append('?')
+····56              url.append(query)
+········
+····57          return ''.join(url)
+········
+····58      @staticmethod
+····59      def _encode_params(data):
+····60          """Encode parameters in a piece of data.
+········
+····61          Will successfully encode parameters when passed as a dict or a list of
+····62          2-tuples. Order is retained if data is a list of 2-tuples but arbitrary
+····63          if parameters are supplied as a dict.
+····64          """
+········
+····65          if isinstance(data, (str, bytes)):
+····66              return to_native_string(data)
+····67          elif hasattr(data, 'read'):
+····68              return data
+····69          elif hasattr(data, '__iter__'):
+····70              result = []
+····71              for k, vs in to_key_val_list(data):
+····72                  if isinstance(vs, basestring) or not hasattr(vs, '__iter__'):
+····73                      vs = [vs]
+····74                  for v in vs:
+····75                      if v is not None:
+····76                          result.append(
+····77                              (k.encode('utf-8') if isinstance(k, str) else k,
+····78                               v.encode('utf-8') if isinstance(v, str) else v))
+····79              return urlencode(result, doseq=True)
+····80          else:
+····81              return data
+········
+····82      @staticmethod
+····83      def _encode_files(files, data):
+····84          """Build the body for a multipart/form-data request.
+········
+····85          Will successfully encode files when passed as a dict or a list of
+····86          2-tuples. Order is retained if data is a list of 2-tuples but arbitrary
+····87          if parameters are supplied as a dict.
+········
+····88          """
+····89          if (not files):
+····90              raise ValueError("Files must be provided.")
+····91          elif isinstance(data, basestring):
+····92              raise ValueError("Data must not be a string.")
+········
+····93          new_fields = []
+····94          fields = to_key_val_list(data or {})
+····95          files = to_key_val_list(files or {})
+········
+····96          for field, val in fields:
+····97              if isinstance(val, basestring) or not hasattr(val, '__iter__'):
+····98                  val = [val]
+····99              for v in val:
+···100                  if v is not None:
+···101                      # Don't call str() on bytestrings: in Py3 it all goes wrong.
+···102                      if not isinstance(v, bytes):
+···103                          v = str(v)
+········
+···104                      new_fields.append(
+···105                          (field.decode('utf-8') if isinstance(field, bytes) else field,
+···106                           v.encode('utf-8') if isinstance(v, str) else v))
+········
+···107          for (k, v) in files:
+···108              # support for explicit filename
+···109              ft = None
+···110              fh = None
+···111              if isinstance(v, (tuple, list)):
+···112                  if len(v) == 2:
+···113                      fn, fp = v
+···114                  elif len(v) == 3:
+···115                      fn, fp, ft = v
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll check the file's indentation style before making the minimal one-line change to to_native_string's default encoding. 
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+requests/utils.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+21 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll make the minimal one-line change: change to_native_string's default encoding from 'ascii' to 'utf-8' so binary UTF-8 payloads decode correctly. 
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+requests/utils.py
+----ARG----
+old_text
+def to_native_string(string, encoding='ascii'):
+----ARG----
+new_text
+def to_native_string(string, encoding='utf-8'):
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+✓ Successfully replaced 1 occurrence(s) in requests/utils.py.
+Found 1 total occurrence(s) of the text.
+TIP: Call show_file to verify the change was correct.
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I changed the default encoding to 'utf-8' and will show the surrounding lines to verify the replacement and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+requests/utils.py
+----ARG----
+start_line
+676
+----ARG----
+end_line
+696
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···676      parsed = urlparse(url)
+········
+···677      try:
+···678          auth = (unquote(parsed.username), unquote(parsed.password))
+···679      except (AttributeError, TypeError):
+···680          auth = ('', '')
+········
+···681      return auth
+········
+········
+···682  def to_native_string(string, encoding='utf-8'):
+···683      """
+···684      Given a string object, regardless of type, returns a representation of that
+···685      string in the native string type, encoding and decoding where necessary.
+···686      This assumes ASCII unless told otherwise.
+···687      """
+···688      out = None
+········
+···689      if isinstance(string, builtin_str):
+···690          out = string
+···691      else:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I'll run the repository syntax check to ensure the one-line change didn't introduce any Python syntax or indentation errors. 
+----BEGIN_FUNCTION_CALL----
+check_repo_syntax
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+✓ All checked Python files have valid syntax
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+I will run the repository verification checklist (syntax, changes, and whether only tests were modified) before finishing. 
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 1
+   Lines deleted: 1
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+⚠️  CHECK 4 WARNING: 1 file(s) have minor static analysis warnings
+   (Consider reviewing, but not blocking)
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/requests/utils.py b/requests/utils.py
+index 132cd2b..e288738 100644
+--- a/requests/utils.py
++++ b/requests/utils.py
+@@ -683,7 +683,7 @@ def get_auth_from_url(url):
+     return auth
+ 
+ 
+-def to_native_string(string, encoding='ascii'):
++def to_native_string(string, encoding='utf-8'):
+     """
+     Given a string object, regardless of type, returns a representation of that
+     string in the native string type, encoding and decoding where necessary.
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+
