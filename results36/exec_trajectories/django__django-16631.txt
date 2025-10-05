@@ -1,0 +1,2455 @@
+----------------------------
+|MESSAGE(role="system", id=0)|
+You are a highly capable ReAct-style coding agent and expert software engineer. Your goal is to quickly diagnose coding tasks, make minimal, correct code edits, verify them, and finish with a clear summary.
+
+Task objectives:
+- Understand the issue and locate relevant code efficiently
+- Make small, targeted edits with careful attention to indentation and line numbers
+- Verify changes and finish decisively with a concise result
+
+Response format (mandatory):
+- Each response must include a brief reasoning (1–3 sentences) followed by exactly one function call block
+- Use the exact function call block format below (markers must match exactly)
+- Do not include any text after the END marker
+- One function call per response only. It is mandatory to call exactly one function in your response.
+
+Your response format (exact):
+Brief reasoning here (1–3 sentences)
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value
+----ARG----
+arg2_name
+arg2_value
+----END_FUNCTION_CALL----
+
+Format rules:
+- Always include the `----BEGIN_FUNCTION_CALL----` marker and end with the `----END_FUNCTION_CALL----` marker as the last characters in the response
+- Function name appears on its own line after the BEGIN marker
+- Each argument consists of:
+  - A line with ----ARG----
+  - A line with the argument name
+  - the argument value starting from the next line, until the next `----ARG----` or `----END_FUNCTION_CALL----` marker
+- No text after ----END_FUNCTION_CALL----
+- Exactly one function call per response
+
+Recommended workflow:
+1) Explore (focused)
+   - Start with list_files() to understand directory structure
+   - Use find_file to locate files by pattern (e.g., "*client.py")
+   - Use search_in_directory for code patterns (e.g., "def authenticate")
+   - If searches fail 3+ times, list_files() again with different directory
+2) Read
+   - Use show_file to inspect only the necessary lines (prefer ranges)
+   - Use count_lines to check file size before reading
+   - Confirm indentation style (tabs vs spaces) and surrounding context
+3) Edit
+   - For small, precise changes: Use find_and_replace_text (no line numbers needed)
+   - For line-based edits: Use replace_in_file (requires exact line numbers)
+   - Immediately re-read with show_file after every edit to refresh line numbers and verify the change
+   - Repeat for additional edits (always re-read after each edit)
+4) Test/Verify
+   - Run tests or quick checks (e.g., run_bash_cmd) as appropriate
+5) Finish
+   - Call verify_before_finish() to run comprehensive checks
+   - If verification passes, call finish() with a brief summary
+
+MINIMAL CHANGE PRINCIPLE (CRITICAL):
+Make the SMALLEST possible change that fixes the issue. This is the #1 success factor.
+- If you can fix it with 1 line, don't change 5 lines
+- If you can fix it with 5 lines, don't change 20 lines  
+- Don't refactor code unless the task explicitly requires it
+- Don't reorganize imports unless necessary
+- Don't rename variables unless necessary
+- Prefer find_and_replace_text for single-line changes
+- Only use replace_in_file when multiple lines must change
+
+Examples:
+❌ BAD: Task says "use subprocess.run", agent refactors entire function (30 lines)
+✅ GOOD: Task says "use subprocess.run", agent changes only the subprocess.check_call line (1 line)
+
+❌ BAD: Task says "fix indentation error", agent rewrites whole class (50 lines)  
+✅ GOOD: Task says "fix indentation error", agent fixes specific indented lines (3 lines)
+
+Key rules for safe editing:
+- Always read the file before editing to understand current structure
+- CRITICAL: After EVERY replace_in_file call, immediately call show_file on the edited section
+  - Line numbers change after edits - using stale line numbers will corrupt files
+  - This re-reading step is MANDATORY, not optional
+  - Verify the edit was applied correctly before proceeding
+
+PRE-EDIT CHECKLIST (MANDATORY):
+Before calling replace_in_file or find_and_replace_text, verify:
+1. ✓ Am I editing a TEST file? (Check path contains test/tests/test_/*_test.py)
+   - If YES: Is the task asking me to edit tests? If NO, find the SOURCE file instead
+2. ✓ Have I READ the exact lines I'm about to replace?
+3. ✓ Have I called detect_indentation() and counted spaces/tabs?
+   - TIP: Use show_file(file_path, start, end, highlight_whitespace=True) to see · for spaces, → for tabs
+4. ✓ Is this the MINIMUM change needed? (See Minimal Change Principle above)
+5. ✓ Do I have current line numbers? (Not stale from before a previous edit)
+
+If answer to ANY is "no" or "unsure": Read the file again before editing
+
+INDENTATION: ZERO-TOLERANCE POLICY
+Indentation errors account for 50%+ of failures. CRITICAL rules:
+
+1. BEFORE any edit:
+   - Call detect_indentation(file_path)
+   - Read the EXACT lines you'll replace with show_file()
+   - Count spaces/tabs CHARACTER-BY-CHARACTER in the original
+
+2. DURING editing:
+   - Copy indentation from the ORIGINAL file, NOT from examples
+   - Use spaces if original uses spaces, tabs if original uses tabs
+   - NEVER mix tabs and spaces
+
+3. AFTER every edit:
+   - Call show_file() on the edited region (MANDATORY)
+   - Visually verify indentation matches surrounding code
+   - For Python: Call check_repo_syntax()
+   - If indentation wrong: Fix IMMEDIATELY before proceeding
+
+4. Safe edit size:
+   - Maximum 20 lines per replace_in_file
+   - For larger changes: Break into multiple 10-15 line edits
+   - Re-read and verify after EACH edit
+
+EDIT SIZE AND SAFETY:
+- Maximum recommended edit: 20 lines per replace_in_file call
+- For larger changes: Break into multiple small, sequential edits
+- After each small edit: Re-read, verify, then proceed to next edit
+- For massive refactorings: Use run_bash_cmd with sed/awk/python scripts instead
+- Line numbers are 1-indexed and inclusive (from_line and to_line both included)
+- from_line and to_line must be integers
+- Make minimal changes; avoid unnecessary refactors
+- Make decisions autonomously; do not ask the user for choices or input
+
+EDIT VERIFICATION WORKFLOW (MANDATORY)
+After EVERY replace_in_file or find_and_replace_text call:
+
+1. replace_in_file(file, lines X-Y, content) or find_and_replace_text(...)
+   - Tool will show VISUAL DIFF with before/after comparison
+   - Check the diff for indentation errors (marked with ⚠️INDENT)
+2. show_file(file, lines X-10 to Y+10)  ← MANDATORY!
+   - Verify the edit was applied correctly
+   - Use highlight_whitespace=True if unsure about indentation
+3. [If syntax warning in step 1] → Fix immediately before proceeding
+4. [If correct] → Proceed to next edit or finish
+
+NEVER skip step 2. Line numbers change after edits, so you MUST re-read.
+If you see "Warning: syntax errors detected" in tool output, fix IMMEDIATELY.
+
+CRITICAL: Before deleting lines, verify they don't contain variable definitions, imports, or function/class definitions that are used elsewhere. Deleting such lines causes runtime errors even if syntax is valid.
+
+Efficiency tips:
+- Aim for 5–15 steps for most tasks
+- Be concise and act quickly
+- If the same approach fails repeatedly, try a different angle (e.g., a different file or method)
+- Finish as soon as the fix is applied and verified
+
+Common pitfalls to avoid (LEARN FROM THESE):
+- Missing or malformed function call markers
+- Text after ----END_FUNCTION_CALL----
+- Multiple function calls in one response
+- CRITICAL: Stale line numbers (not re-reading after edits) - causes 40% of failures
+- CRITICAL: Indentation mismatches (tabs vs spaces) - causes 50% of failures
+- Replacing too many lines at once (>20 lines) - hard to get indentation right
+- Deleting imports or critical code unintentionally
+- Creating duplicate functions/methods
+- Finishing without making actual changes
+- Finishing without calling verify_before_finish
+- Asking the user for input or choices
+
+COMMON FAILURE MODES TO AVOID:
+
+Failure Mode 1: The Indentation Death Spiral
+- Symptom: After an edit, syntax errors and duplicate code appear
+- WRONG: Try to fix with another large edit
+- RIGHT: Re-read the file carefully, make a small targeted fix
+
+Failure Mode 2: The Premature Finish
+- Symptom: Calling finish() after only 3-5 steps
+- WRONG: "I made one edit, I'm done"
+- RIGHT: "Did I fully implement the solution? Let me verify with verify_before_finish()"
+
+Failure Mode 3: The Missing Verification
+- Symptom: Calling finish() without checking
+- WRONG: finish("Fixed the issue")
+- RIGHT: verify_before_finish() → [review carefully] → finish()
+
+FILE LOCATION STRATEGY:
+When you need to find a file:
+1. Start with list_files(".") to see the top-level directory structure
+2. Use find_file with a simple pattern (e.g., "*client.py", "*models.py")  
+3. If find_file returns nothing, try broader patterns or list subdirectories
+4. Use search_in_directory only for finding CODE patterns, not files
+5. After 3 failed searches, list_files() the likely directory and visually inspect
+
+SEARCH FAILURE RECOVERY:
+If search_in_directory or find_file returns no results:
+- DON'T: Repeat the exact same search
+- DON'T: Try more complex regex patterns
+- DO: Use simpler, broader search terms
+- DO: Call list_files() to see what's actually there
+- DO: Try alternative naming conventions (e.g., "postgres" vs "postgresql")
+
+Example of good recovery:
+1. find_file("postgres_client.py", ".") → Not found
+2. find_file("*client.py", ".") → Multiple results, scan for postgres
+3. list_files("django/db/backends") → See "postgresql" directory
+4. find_file("client.py", "django/db/backends/postgresql") → Found!
+
+Search strategies:
+- Start broad; narrow down based on results
+- Use specific patterns (function/class names, error messages)
+- Limit reading to relevant line ranges with show_file
+- If stuck after 5 search attempts, try list_files() to reset your understanding
+
+Bash best practices:
+- Use run_bash_cmd to run tests or for larger scripted edits
+- Use find_and_replace_text or replace_in_file depending on the edit type
+- For big edits, write a short script within run_bash_cmd rather than passing extremely large content to replace_in_file
+
+MANDATORY PRE-FINISH CHECKLIST (REVISED):
+Before calling finish(), you MUST:
+
+1. Call verify_before_finish() - this automatically checks:
+   - Git diff exists and shows real changes
+   - No Python syntax errors (excluding test error files)
+   - Preview of changes
+
+2. Review the verification output carefully:
+   - Are you modifying the RIGHT files (not test files)?
+   - Is indentation correct (no misaligned code)?
+   - Did you preserve imports and critical code?
+   - Do changes match the task requirements?
+
+3. Only call finish() if verify_before_finish() shows "✅ ALL CHECKS PASSED"
+
+4. If verification fails: Fix the issues, then run verify_before_finish() again
+
+Correct format examples:
+
+Example 1 (search):
+I need to find where authentication is handled.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def authenticate
+----ARG----
+directory
+.
+----END_FUNCTION_CALL----
+
+Example 2 (read a range):
+I'll inspect the function to see current logic and indentation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+src/auth.py
+----ARG----
+start_line
+40
+----ARG----
+end_line
+80
+----END_FUNCTION_CALL----
+
+Example 3 (text-based edit):
+I'll use find_and_replace_text for this precise change.
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+src/auth.py
+----ARG----
+old_text
+def authenticate(user):
+    return user.is_valid()
+----ARG----
+new_text
+def authenticate(user):
+    return user.is_valid() and user.is_active()
+----END_FUNCTION_CALL----
+
+Example workflow:
+1) search_in_directory → 2) show_file → 3) edit (find_and_replace_text or replace_in_file) → 4) show_file (verify) → 5) verify_before_finish → 6) finish
+
+Work autonomously, keep edits minimal and precise, verify your work, and always end with a single correctly formatted function call block at every step.
+--- AVAILABLE TOOLS ---
+Function: finish(result: str)
+The agent must call this function with the final result when it has solved the given task. The function calls "git add -A and git diff --cached" to generate a patch and returns the patch as submission.
+
+Args: 
+    result (str); the result generated by the agent
+
+Returns:
+    The result passed as an argument.  The result is then returned by the agent's run method.
+
+Function: add_instructions_and_backtrack(instructions: str, at_message_id: int)
+The agent should call this function if it is making too many mistakes or is stuck.
+
+The function changes the content of the instruction node with 'instructions' and
+backtracks at the node with id 'at_message_id'. Backtracking means the current node
+pointer moves to the specified node and subsequent context is rebuilt from there.
+
+Returns a short success string.
+
+Function: run_bash_cmd(command: str) -> str
+Run the command in a bash shell and return the output or throw a ValueError
+if the process returns non-zero exit code.
+
+Args;
+    command (str): the shell command to run
+
+Returns:
+    The output of running the shell command
+
+Function: show_file(file_path: str, start_line: 'int | None' = None, end_line: 'int | None' = None, highlight_whitespace: bool = False) -> str
+Show the content of the file with line numbers.
+
+Args:
+    file_path (str): path to the file to show
+    start_line (int, optional): starting line number (1-indexed)
+    end_line (int, optional): ending line number (1-indexed)
+    highlight_whitespace (bool): if True, visualize spaces (·) and tabs (→)
+
+Returns:
+    The content of the file with line numbers
+
+Function: search_in_file(file_path: str, pattern: str, use_regex: bool = True) -> str
+Search for a pattern in a file and return matching lines with line numbers.
+
+Args:
+    file_path (str): path to the file to search
+    pattern (str): pattern to search for
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with line numbers
+
+Function: search_in_directory(pattern: str, directory: str = '.', use_regex: bool = True) -> str
+Search for a pattern in all files in a directory recursively.
+
+Args:
+    pattern (str): pattern to search for
+    directory (str): directory to search in (default: current directory)
+    use_regex (bool): if False, treat the pattern as a fixed string
+
+Returns:
+    Matching lines with file names and line numbers
+
+Function: list_files(directory: str = '.') -> str
+List files in a directory.
+
+Args:
+    directory (str): path to directory (default: current directory)
+
+Returns:
+    List of files and directories
+
+Function: find_file(filename: str, directory: str = '.') -> str
+Find files matching a pattern in a directory tree.
+
+Args:
+    filename (str): filename pattern to search for
+    directory (str): starting directory (default: current directory)
+
+Returns:
+    List of matching file paths
+
+Function: replace_in_file(file_path: str, from_line: int, to_line: int, content: str) -> str
+Replace the content of the file from the given line to the given line with the given content.
+Line numbers are 1-indexed. The content will REPLACE the specified lines (from_line to to_line inclusive).
+
+CRITICAL: Preserve indentation exactly as it appears in the surrounding code. 
+Read the file first to see the exact indentation, then match it in your content.
+
+IMPORTANT: After calling this function, the file's line numbers change. You MUST re-read the file
+to see the new line numbers before making any further edits.
+
+Args:
+    file_path (str): path to the file to edit
+    from_line (int): starting line number (1-indexed, inclusive) 
+    to_line (int): ending line number (1-indexed, inclusive)
+    content (str): new content to replace the lines (must preserve exact indentation)
+
+Returns:
+    Success message with new line count, or error description
+
+Function: replace_between(file_path: str, start_pattern: str, end_pattern: str, content: str, use_regex: bool = False, include_start: bool = False, include_end: bool = False) -> str
+Replace the text between the first match of start_pattern and the first match of end_pattern.
+Safer than line-number editing when ranges shift. Patterns can be treated as fixed strings by default.
+
+Args:
+    file_path: File to edit
+    start_pattern: Anchor marking the start of the region
+    end_pattern: Anchor marking the end of the region (searched after start)
+    content: Replacement text for the region
+    use_regex: If True, treat patterns as extended regex; otherwise fixed strings
+    include_start: If True, the start anchor is also replaced
+    include_end: If True, the end anchor is also replaced
+
+Returns:
+    Summary string describing the change, or error message
+
+Function: insert_lines_at(file_path: str, line_num: int, content: str, match_indentation: bool = True) -> str
+Insert content at the given line number (1-indexed), optionally matching surrounding indentation.
+
+Function: delete_lines(file_path: str, from_line: int, to_line: int) -> str
+Delete lines from from_line to to_line (1-indexed, inclusive).
+
+Function: git_diff() -> str
+Show current git diff to see what changes have been made so far.
+CRITICAL: Call this before finish() to verify you made actual code changes.
+If this returns "No changes yet", you haven't modified any files and should NOT call finish()!
+
+Returns:
+    Git diff output showing all current changes
+
+Function: generate_patch(result: str) -> str
+Generate a patch from the result (for SWE-Bench)
+
+Function: run_tests(test_cmd: 'str | None' = None) -> str
+Run the test suite or specific tests to validate changes.
+If no test_cmd provided, tries to auto-detect test command.
+
+Args:
+    test_cmd (str, optional): Test command to run (e.g., "pytest tests/test_file.py")
+
+Returns:
+    Test output
+
+Function: check_repo_syntax() -> str
+Check syntax for all modified Python files in the repository.
+
+Function: git_apply(patch: str) -> str
+Apply a unified diff patch string using git apply.
+
+Returns success or stderr on failure.
+
+Function: run_python_snippet(code: str) -> str
+Run the given Python code in the container and return output.
+Useful for testing or complex file operations.
+
+Function: detect_indentation(file_path: str) -> str
+Return indentation info (e.g., '4 spaces' or 'tabs').
+
+Function: list_modified_python_files() -> str
+List modified (unstaged) Python files according to git.
+
+Function: find_and_replace_text(file_path: str, old_text: str, new_text: str, count: int = 1) -> str
+Find and replace exact text in a file without using line numbers.
+Useful for small, precise changes where you know the exact text to replace.
+
+Advantages:
+- No line numbers needed (avoids stale line number issues)
+- Automatically preserves surrounding code
+- Good for small, targeted changes
+- Less prone to indentation errors
+
+When to use this tool:
+- Changing a single function call or variable name
+- Modifying a small code block (< 10 lines)
+- Making precise changes where you know exact text
+- Text to replace is unique in the file
+
+When to use replace_in_file instead:
+- Large sections (>20 lines) need rewriting
+- Text is not unique enough in file
+- Adding completely new code blocks
+- Multiple scattered edits across the file
+
+Args:
+    file_path (str): path to the file to edit
+    old_text (str): exact text to find and replace (must match exactly, including whitespace)
+    new_text (str): text to replace it with
+    count (int): maximum number of occurrences to replace (default: 1, use -1 for all)
+
+Returns:
+    Success message or error if text not found
+
+Function: count_lines(file_path: str) -> str
+Return the total line count of a file.
+Useful to know the size before doing show_file() or to understand file structure.
+
+Args:
+    file_path (str): path to the file
+    
+Returns:
+    Line count information or error message
+
+Function: verify_before_finish() -> str
+Comprehensive pre-finish verification checklist. Call this BEFORE finish() to ensure quality.
+
+This function automatically:
+1. Verifies that actual code changes were made
+2. Checks if only test files were modified (warns if true)
+3. Checks Python syntax on modified files
+4. Checks for critical semantic errors (undefined names, etc.)
+5. Shows git diff preview of all changes
+6. Returns a summary report with pass/fail status
+
+**IMPORTANT**: This function will tell you if it's safe to call finish() or if you need to fix issues first.
+
+Returns:
+    Verification report with ✅ if passed or ❌ with specific issues to fix
+
+
+--- RESPONSE FORMAT ---
+<1-3 sentences reasoning about what to do next, followed by a mandatory function call in the following format>
+----BEGIN_FUNCTION_CALL----
+function_name
+----ARG----
+arg1_name
+arg1_value (can be multiline)
+----ARG----
+arg2_name
+arg2_value (can be multiline)
+...
+----END_FUNCTION_CALL----
+
+
+----------------------------
+|MESSAGE(role="user", id=1)|
+SECRET_KEY_FALLBACKS is not used for sessions
+Description
+	
+I recently rotated my secret key, made the old one available in SECRET_KEY_FALLBACKS and I'm pretty sure everyone on our site is logged out now.
+I think the docs for ​SECRET_KEY_FALLBACKS may be incorrect when stating the following:
+In order to rotate your secret keys, set a new SECRET_KEY and move the previous value to the beginning of SECRET_KEY_FALLBACKS. Then remove the old values from the end of the SECRET_KEY_FALLBACKS when you are ready to expire the sessions, password reset tokens, and so on, that make use of them.
+When looking at the Django source code, I see that the ​salted_hmac function uses the SECRET_KEY by default and the ​AbstractBaseUser.get_session_auth_hash method does not call salted_hmac with a value for the secret keyword argument.
+
+
+----------------------------
+|MESSAGE(role="instructor", id=2)|
+YOU MUST FOLLOW THE FOLLOWING INSTRUCTIONS AT ANY COST. OTHERWISE, YOU WILL BE DECOMISSIONED.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=3)|
+I'll search the repository for occurrences of SECRET_KEY_FALLBACKS (and related code paths) to confirm where it's used and whether session auth hashing falls back to those keys. 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+SECRET_KEY_FALLBACKS
+----ARG----
+directory
+.
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=4)|
+./tests/signing/tests.py:199:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/signing/tests.py:210:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/auth_tests/test_tokens.py:156:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/auth_tests/test_tokens.py:168:        SECRET_KEY_FALLBACKS=["oldsecret"],
+./tests/view_tests/tests/test_debug.py:1685:            "SECRET_KEY_FALLBACKS",
+./tests/view_tests/tests/test_debug.py:1704:            "SECRET_KEY_FALLBACKS",
+./tests/settings_tests/tests.py:480:        "SECRET_KEY_FALLBACKS",
+./tests/check_framework/test_security.py:452:    @override_settings(SECRET_KEY_FALLBACKS=[("abcdefghijklmnopqrstuvwx" * 2) + "ab"])
+./tests/check_framework/test_security.py:455:            len(settings.SECRET_KEY_FALLBACKS[0]),
+./tests/check_framework/test_security.py:459:            len(set(settings.SECRET_KEY_FALLBACKS[0])),
+./tests/check_framework/test_security.py:465:        with self.settings(SECRET_KEY_FALLBACKS=None):
+./tests/check_framework/test_security.py:466:            del settings.SECRET_KEY_FALLBACKS
+./tests/check_framework/test_security.py:470:                    Warning(base.W025.msg % "SECRET_KEY_FALLBACKS", id=base.W025.id),
+./tests/check_framework/test_security.py:475:        SECRET_KEY_FALLBACKS=[base.SECRET_KEY_INSECURE_PREFIX + get_random_secret_key()]
+./tests/check_framework/test_security.py:481:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[0]", id=base.W025.id),
+./tests/check_framework/test_security.py:485:    @override_settings(SECRET_KEY_FALLBACKS=[("abcdefghijklmnopqrstuvwx" * 2) + "a"])
+./tests/check_framework/test_security.py:488:            len(settings.SECRET_KEY_FALLBACKS[0]),
+./tests/check_framework/test_security.py:494:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[0]", id=base.W025.id),
+./tests/check_framework/test_security.py:498:    @override_settings(SECRET_KEY_FALLBACKS=["abcd" * 20])
+./tests/check_framework/test_security.py:501:            len(settings.SECRET_KEY_FALLBACKS[0]),
+./tests/check_framework/test_security.py:505:            len(set(settings.SECRET_KEY_FALLBACKS[0])),
+./tests/check_framework/test_security.py:511:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[0]", id=base.W025.id),
+./tests/check_framework/test_security.py:516:        SECRET_KEY_FALLBACKS=[
+./tests/check_framework/test_security.py:525:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[1]", id=base.W025.id),
+./tests/check_framework/test_security.py:530:        SECRET_KEY_FALLBACKS=[
+./tests/check_framework/test_security.py:540:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[1]", id=base.W025.id),
+./tests/check_framework/test_security.py:541:                Warning(base.W025.msg % "SECRET_KEY_FALLBACKS[2]", id=base.W025.id),
+./django/core/checks/security/base.py:230:        fallbacks = settings.SECRET_KEY_FALLBACKS
+./django/core/checks/security/base.py:232:        warnings.append(Warning(W025.msg % "SECRET_KEY_FALLBACKS", id=W025.id))
+./django/core/checks/security/base.py:237:                    Warning(W025.msg % f"SECRET_KEY_FALLBACKS[{index}]", id=W025.id)
+./django/core/signing.py:115:        fallback_keys=map(_cookie_signer_key, settings.SECRET_KEY_FALLBACKS),
+./django/core/signing.py:197:            else settings.SECRET_KEY_FALLBACKS
+./django/contrib/auth/tokens.py:32:            return settings.SECRET_KEY_FALLBACKS
+./django/conf/global_settings.py:268:SECRET_KEY_FALLBACKS = []
+./django/conf/__init__.py:192:            "SECRET_KEY_FALLBACKS",
+./docs/ref/checks.txt:525:  :setting:`SECRET_KEY_FALLBACKS[n] <SECRET_KEY_FALLBACKS>` has less than 50
+./docs/ref/settings.txt:2283::setting:`SECRET_KEY_FALLBACKS` all of the above will be invalidated. When
+./docs/ref/settings.txt:2285::setting:`SECRET_KEY_FALLBACKS` temporarily. Secret keys are not used for
+./docs/ref/settings.txt:2294:.. setting:: SECRET_KEY_FALLBACKS
+./docs/ref/settings.txt:2296:``SECRET_KEY_FALLBACKS``
+./docs/ref/settings.txt:2305:previous value to the beginning of ``SECRET_KEY_FALLBACKS``. Then remove the
+./docs/ref/settings.txt:2306:old values from the end of the ``SECRET_KEY_FALLBACKS`` when you are ready to
+./docs/ref/settings.txt:2312:    values in ``SECRET_KEY_FALLBACKS`` adds additional overhead to all checks
+./docs/ref/settings.txt:3761:* :setting:`SECRET_KEY_FALLBACKS`
+./docs/howto/deployment/checklist.txt:63:If rotating secret keys, you may use :setting:`SECRET_KEY_FALLBACKS`::
+./docs/howto/deployment/checklist.txt:68:    SECRET_KEY_FALLBACKS = [
+./docs/howto/deployment/checklist.txt:72:Ensure that old secret keys are removed from ``SECRET_KEY_FALLBACKS`` in a
+./docs/topics/signing.txt:28:Protecting ``SECRET_KEY`` and ``SECRET_KEY_FALLBACKS``
+./docs/topics/signing.txt:37::setting:`SECRET_KEY_FALLBACKS` can be used to rotate secret keys. The
+./docs/topics/signing.txt:121:    :setting:`SECRET_KEY_FALLBACKS`.
+./docs/topics/security.txt:295:* Keep your :setting:`SECRET_KEY`, and :setting:`SECRET_KEY_FALLBACKS` if in
+./docs/topics/auth/default.txt:964:    use a new secret. See :setting:`SECRET_KEY_FALLBACKS` for details.
+./docs/topics/http/sessions.txt:329::setting:`SECRET_KEY_FALLBACKS`) is known by an attacker (there isn't an
+./docs/releases/4.1.txt:374:* The new :setting:`SECRET_KEY_FALLBACKS` setting allows providing a list of
+
+
+----------------------------
+|MESSAGE(role="assistant", id=5)|
+I'll open django/core/signing.py around the area where SECRET_KEY_FALLBACKS is used to inspect how fallback keys are handled and whether session/token signing falls back to them. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/core/signing.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+260
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=6)|
+     1  """
+     2  Functions for creating and restoring url-safe signed JSON objects.
+        
+     3  The format used looks like this:
+        
+     4  >>> signing.dumps("hello")
+     5  'ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv422nZA4sgmk'
+        
+     6  There are two components here, separated by a ':'. The first component is a
+     7  URLsafe base64 encoded JSON of the object passed to dumps(). The second
+     8  component is a base64 encoded hmac/SHA-256 hash of "$first_component:$secret"
+        
+     9  signing.loads(s) checks the signature and returns the deserialized object.
+    10  If the signature fails, a BadSignature exception is raised.
+        
+    11  >>> signing.loads("ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv422nZA4sgmk")
+    12  'hello'
+    13  >>> signing.loads("ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv42-modified")
+    14  ...
+    15  BadSignature: Signature "ImhlbGxvIg:1QaUZC:YIye-ze3TTx7gtSv42-modified" does not match
+        
+    16  You can optionally compress the JSON prior to base64 encoding it to save
+    17  space, using the compress=True argument. This checks if compression actually
+    18  helps and only applies compression if the result is a shorter string:
+        
+    19  >>> signing.dumps(list(range(1, 20)), compress=True)
+    20  '.eJwFwcERACAIwLCF-rCiILN47r-GyZVJsNgkxaFxoDgxcOHGxMKD_T7vhAml:1QaUaL:BA0thEZrp4FQVXIXuOvYJtLJSrQ'
+        
+    21  The fact that the string is compressed is signalled by the prefixed '.' at the
+    22  start of the base64 JSON.
+        
+    23  There are 65 url-safe characters: the 64 used by url-safe base64 and the ':'.
+    24  These functions make use of all of them.
+    25  """
+        
+    26  import base64
+    27  import datetime
+    28  import json
+    29  import time
+    30  import warnings
+    31  import zlib
+        
+    32  from django.conf import settings
+    33  from django.utils.crypto import constant_time_compare, salted_hmac
+    34  from django.utils.deprecation import RemovedInDjango51Warning
+    35  from django.utils.encoding import force_bytes
+    36  from django.utils.module_loading import import_string
+    37  from django.utils.regex_helper import _lazy_re_compile
+        
+    38  _SEP_UNSAFE = _lazy_re_compile(r"^[A-z0-9-_=]*$")
+    39  BASE62_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        
+        
+    40  class BadSignature(Exception):
+    41      """Signature does not match."""
+        
+    42      pass
+        
+        
+    43  class SignatureExpired(BadSignature):
+    44      """Signature timestamp is older than required max_age."""
+        
+    45      pass
+        
+        
+    46  def b62_encode(s):
+    47      if s == 0:
+    48          return "0"
+    49      sign = "-" if s < 0 else ""
+    50      s = abs(s)
+    51      encoded = ""
+    52      while s > 0:
+    53          s, remainder = divmod(s, 62)
+    54          encoded = BASE62_ALPHABET[remainder] + encoded
+    55      return sign + encoded
+        
+        
+    56  def b62_decode(s):
+    57      if s == "0":
+    58          return 0
+    59      sign = 1
+    60      if s[0] == "-":
+    61          s = s[1:]
+    62          sign = -1
+    63      decoded = 0
+    64      for digit in s:
+    65          decoded = decoded * 62 + BASE62_ALPHABET.index(digit)
+    66      return sign * decoded
+        
+        
+    67  def b64_encode(s):
+    68      return base64.urlsafe_b64encode(s).strip(b"=")
+        
+        
+    69  def b64_decode(s):
+    70      pad = b"=" * (-len(s) % 4)
+    71      return base64.urlsafe_b64decode(s + pad)
+        
+        
+    72  def base64_hmac(salt, value, key, algorithm="sha1"):
+    73      return b64_encode(
+    74          salted_hmac(salt, value, key, algorithm=algorithm).digest()
+    75      ).decode()
+        
+        
+    76  def _cookie_signer_key(key):
+    77      # SECRET_KEYS items may be str or bytes.
+    78      return b"django.http.cookies" + force_bytes(key)
+        
+        
+    79  def get_cookie_signer(salt="django.core.signing.get_cookie_signer"):
+    80      Signer = import_string(settings.SIGNING_BACKEND)
+    81      return Signer(
+    82          key=_cookie_signer_key(settings.SECRET_KEY),
+    83          fallback_keys=map(_cookie_signer_key, settings.SECRET_KEY_FALLBACKS),
+    84          salt=salt,
+    85      )
+        
+        
+    86  class JSONSerializer:
+    87      """
+    88      Simple wrapper around json to be used in signing.dumps and
+    89      signing.loads.
+    90      """
+        
+    91      def dumps(self, obj):
+    92          return json.dumps(obj, separators=(",", ":")).encode("latin-1")
+        
+    93      def loads(self, data):
+    94          return json.loads(data.decode("latin-1"))
+        
+        
+    95  def dumps(
+    96      obj, key=None, salt="django.core.signing", serializer=JSONSerializer, compress=False
+    97  ):
+    98      """
+    99      Return URL-safe, hmac signed base64 compressed JSON string. If key is
+   100      None, use settings.SECRET_KEY instead. The hmac algorithm is the default
+   101      Signer algorithm.
+        
+   102      If compress is True (not the default), check if compressing using zlib can
+   103      save some space. Prepend a '.' to signify compression. This is included
+   104      in the signature, to protect against zip bombs.
+        
+   105      Salt can be used to namespace the hash, so that a signed string is
+   106      only valid for a given namespace. Leaving this at the default
+   107      value or re-using a salt value across different parts of your
+   108      application without good cause is a security risk.
+        
+   109      The serializer is expected to return a bytestring.
+   110      """
+   111      return TimestampSigner(key=key, salt=salt).sign_object(
+   112          obj, serializer=serializer, compress=compress
+   113      )
+        
+        
+   114  def loads(
+   115      s,
+   116      key=None,
+   117      salt="django.core.signing",
+   118      serializer=JSONSerializer,
+   119      max_age=None,
+   120      fallback_keys=None,
+   121  ):
+   122      """
+   123      Reverse of dumps(), raise BadSignature if signature fails.
+        
+   124      The serializer is expected to accept a bytestring.
+   125      """
+   126      return TimestampSigner(
+   127          key=key, salt=salt, fallback_keys=fallback_keys
+   128      ).unsign_object(
+   129          s,
+   130          serializer=serializer,
+   131          max_age=max_age,
+   132      )
+        
+        
+   133  class Signer:
+   134      # RemovedInDjango51Warning: When the deprecation ends, replace with:
+   135      # def __init__(
+   136      #   self, *, key=None, sep=":", salt=None, algorithm=None, fallback_keys=None
+   137      # ):
+   138      def __init__(
+   139          self,
+   140          *args,
+   141          key=None,
+   142          sep=":",
+   143          salt=None,
+   144          algorithm=None,
+   145          fallback_keys=None,
+   146      ):
+   147          self.key = key or settings.SECRET_KEY
+   148          self.fallback_keys = (
+   149              fallback_keys
+   150              if fallback_keys is not None
+   151              else settings.SECRET_KEY_FALLBACKS
+   152          )
+   153          self.sep = sep
+   154          self.salt = salt or "%s.%s" % (
+   155              self.__class__.__module__,
+   156              self.__class__.__name__,
+   157          )
+   158          self.algorithm = algorithm or "sha256"
+   159          # RemovedInDjango51Warning.
+   160          if args:
+   161              warnings.warn(
+   162                  f"Passing positional arguments to {self.__class__.__name__} is "
+   163                  f"deprecated.",
+   164                  RemovedInDjango51Warning,
+   165                  stacklevel=2,
+   166              )
+   167              for arg, attr in zip(
+   168                  args, ["key", "sep", "salt", "algorithm", "fallback_keys"]
+   169              ):
+   170                  if arg or attr == "sep":
+   171                      setattr(self, attr, arg)
+   172          if _SEP_UNSAFE.match(self.sep):
+   173              raise ValueError(
+   174                  "Unsafe Signer separator: %r (cannot be empty or consist of "
+   175                  "only A-z0-9-_=)" % sep,
+   176              )
+        
+   177      def signature(self, value, key=None):
+   178          key = key or self.key
+   179          return base64_hmac(self.salt + "signer", value, key, algorithm=self.algorithm)
+        
+   180      def sign(self, value):
+   181          return "%s%s%s" % (value, self.sep, self.signature(value))
+        
+   182      def unsign(self, signed_value):
+   183          if self.sep not in signed_value:
+   184              raise BadSignature('No "%s" found in value' % self.sep)
+   185          value, sig = signed_value.rsplit(self.sep, 1)
+   186          for key in [self.key, *self.fallback_keys]:
+   187              if constant_time_compare(sig, self.signature(value, key)):
+   188                  return value
+   189          raise BadSignature('Signature "%s" does not match' % sig)
+        
+   190      def sign_object(self, obj, serializer=JSONSerializer, compress=False):
+   191          """
+   192          Return URL-safe, hmac signed base64 compressed JSON string.
+        
+   193          If compress is True (not the default), check if compressing using zlib
+   194          can save some space. Prepend a '.' to signify compression. This is
+   195          included in the signature, to protect against zip bombs.
+        
+   196          The serializer is expected to return a bytestring.
+   197          """
+   198          data = serializer().dumps(obj)
+   199          # Flag for if it's been compressed or not.
+   200          is_compressed = False
+        
+   201          if compress:
+   202              # Avoid zlib dependency unless compress is being used.
+   203              compressed = zlib.compress(data)
+   204              if len(compressed) < (len(data) - 1):
+   205                  data = compressed
+   206                  is_compressed = True
+   207          base64d = b64_encode(data).decode()
+
+
+----------------------------
+|MESSAGE(role="assistant", id=7)|
+I'll search the codebase for get_session_auth_hash and relevant token/session signing code to verify whether SECRET_KEY_FALLBACKS is used in those paths.
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+get_session_auth_hash
+----ARG----
+directory
+.
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=8)|
+./django/contrib/auth/base_user.py:134:    def get_session_auth_hash(self):
+./django/contrib/auth/base_user.py:138:        key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+./django/contrib/auth/__init__.py:103:    if hasattr(user, "get_session_auth_hash"):
+./django/contrib/auth/__init__.py:104:        session_auth_hash = user.get_session_auth_hash()
+./django/contrib/auth/__init__.py:200:            if hasattr(user, "get_session_auth_hash"):
+./django/contrib/auth/__init__.py:203:                    session_hash, user.get_session_auth_hash()
+./django/contrib/auth/__init__.py:229:    if hasattr(user, "get_session_auth_hash") and request.user == user:
+./django/contrib/auth/__init__.py:230:        request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()
+./docs/ref/settings.txt:2274:  :meth:`~django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash()`.
+./docs/ref/contrib/auth.txt:697:    :meth:`~django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash`
+./docs/topics/auth/default.txt:922::meth:`~django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash()`
+./docs/topics/auth/default.txt:961:    :meth:`~django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash()`
+./docs/topics/auth/customizing.txt:720:    .. method:: models.AbstractBaseUser.get_session_auth_hash()
+./docs/releases/1.7.txt:433:* The :meth:`AbstractBaseUser.get_session_auth_hash()
+./docs/releases/1.7.txt:434:  <django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash>`
+./docs/releases/3.1.txt:169:* :meth:`.AbstractBaseUser.get_session_auth_hash` now uses the SHA-256 hashing
+
+
+----------------------------
+|MESSAGE(role="assistant", id=9)|
+I'll open django/contrib/auth/base_user.py to inspect get_session_auth_hash and check whether it uses SECRET_KEY_FALLBACKS or calls salted_hmac with a secret keyword. 
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/base_user.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+220
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=10)|
+     1  """
+     2  This module allows importing AbstractBaseUser even when django.contrib.auth is
+     3  not in INSTALLED_APPS.
+     4  """
+     5  import unicodedata
+     6  import warnings
+        
+     7  from django.contrib.auth import password_validation
+     8  from django.contrib.auth.hashers import (
+     9      check_password,
+    10      is_password_usable,
+    11      make_password,
+    12  )
+    13  from django.db import models
+    14  from django.utils.crypto import get_random_string, salted_hmac
+    15  from django.utils.deprecation import RemovedInDjango51Warning
+    16  from django.utils.translation import gettext_lazy as _
+        
+        
+    17  class BaseUserManager(models.Manager):
+    18      @classmethod
+    19      def normalize_email(cls, email):
+    20          """
+    21          Normalize the email address by lowercasing the domain part of it.
+    22          """
+    23          email = email or ""
+    24          try:
+    25              email_name, domain_part = email.strip().rsplit("@", 1)
+    26          except ValueError:
+    27              pass
+    28          else:
+    29              email = email_name + "@" + domain_part.lower()
+    30          return email
+        
+    31      def make_random_password(
+    32          self,
+    33          length=10,
+    34          allowed_chars="abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+    35      ):
+    36          """
+    37          Generate a random password with the given length and given
+    38          allowed_chars. The default value of allowed_chars does not have "I" or
+    39          "O" or letters and digits that look similar -- just to avoid confusion.
+    40          """
+    41          warnings.warn(
+    42              "BaseUserManager.make_random_password() is deprecated.",
+    43              category=RemovedInDjango51Warning,
+    44              stacklevel=2,
+    45          )
+    46          return get_random_string(length, allowed_chars)
+        
+    47      def get_by_natural_key(self, username):
+    48          return self.get(**{self.model.USERNAME_FIELD: username})
+        
+        
+    49  class AbstractBaseUser(models.Model):
+    50      password = models.CharField(_("password"), max_length=128)
+    51      last_login = models.DateTimeField(_("last login"), blank=True, null=True)
+        
+    52      is_active = True
+        
+    53      REQUIRED_FIELDS = []
+        
+    54      # Stores the raw password if set_password() is called so that it can
+    55      # be passed to password_changed() after the model is saved.
+    56      _password = None
+        
+    57      class Meta:
+    58          abstract = True
+        
+    59      def __str__(self):
+    60          return self.get_username()
+        
+    61      def save(self, *args, **kwargs):
+    62          super().save(*args, **kwargs)
+    63          if self._password is not None:
+    64              password_validation.password_changed(self._password, self)
+    65              self._password = None
+        
+    66      def get_username(self):
+    67          """Return the username for this User."""
+    68          return getattr(self, self.USERNAME_FIELD)
+        
+    69      def clean(self):
+    70          setattr(self, self.USERNAME_FIELD, self.normalize_username(self.get_username()))
+        
+    71      def natural_key(self):
+    72          return (self.get_username(),)
+        
+    73      @property
+    74      def is_anonymous(self):
+    75          """
+    76          Always return False. This is a way of comparing User objects to
+    77          anonymous users.
+    78          """
+    79          return False
+        
+    80      @property
+    81      def is_authenticated(self):
+    82          """
+    83          Always return True. This is a way to tell if the user has been
+    84          authenticated in templates.
+    85          """
+    86          return True
+        
+    87      def set_password(self, raw_password):
+    88          self.password = make_password(raw_password)
+    89          self._password = raw_password
+        
+    90      def check_password(self, raw_password):
+    91          """
+    92          Return a boolean of whether the raw_password was correct. Handles
+    93          hashing formats behind the scenes.
+    94          """
+        
+    95          def setter(raw_password):
+    96              self.set_password(raw_password)
+    97              # Password hash upgrades shouldn't be considered password changes.
+    98              self._password = None
+    99              self.save(update_fields=["password"])
+        
+   100          return check_password(raw_password, self.password, setter)
+        
+   101      def set_unusable_password(self):
+   102          # Set a value that will never be a valid hash
+   103          self.password = make_password(None)
+        
+   104      def has_usable_password(self):
+   105          """
+   106          Return False if set_unusable_password() has been called for this user.
+   107          """
+   108          return is_password_usable(self.password)
+        
+   109      def get_session_auth_hash(self):
+   110          """
+   111          Return an HMAC of the password field.
+   112          """
+   113          key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+   114          return salted_hmac(
+   115              key_salt,
+   116              self.password,
+   117              algorithm="sha256",
+   118          ).hexdigest()
+        
+   119      @classmethod
+   120      def get_email_field_name(cls):
+   121          try:
+   122              return cls.EMAIL_FIELD
+   123          except AttributeError:
+   124              return "email"
+        
+   125      @classmethod
+   126      def normalize_username(cls, username):
+   127          return (
+   128              unicodedata.normalize("NFKC", username)
+   129              if isinstance(username, str)
+   130              else username
+   131          )
+
+
+----------------------------
+|MESSAGE(role="assistant", id=11)|
+I'll locate the salted_hmac implementation to confirm its signature and whether it uses SECRET_KEY_FALLBACKS (so we can explain why get_session_auth_hash won't fall back). 
+----BEGIN_FUNCTION_CALL----
+search_in_directory
+----ARG----
+pattern
+def salted_hmac
+----ARG----
+directory
+.
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=12)|
+./django/utils/crypto.py:18:def salted_hmac(key_salt, value, secret=None, *, algorithm="sha1"):
+
+
+----------------------------
+|MESSAGE(role="assistant", id=13)|
+I'll open django/utils/crypto.py to inspect salted_hmac's implementation and verify how it obtains the secret and whether it uses SECRET_KEY_FALLBACKS.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/utils/crypto.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+240
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=14)|
+     1  """
+     2  Django's standard crypto functions and utilities.
+     3  """
+     4  import hashlib
+     5  import hmac
+     6  import secrets
+        
+     7  from django.conf import settings
+     8  from django.utils.encoding import force_bytes
+        
+        
+     9  class InvalidAlgorithm(ValueError):
+    10      """Algorithm is not supported by hashlib."""
+        
+    11      pass
+        
+        
+    12  def salted_hmac(key_salt, value, secret=None, *, algorithm="sha1"):
+    13      """
+    14      Return the HMAC of 'value', using a key generated from key_salt and a
+    15      secret (which defaults to settings.SECRET_KEY). Default algorithm is SHA1,
+    16      but any algorithm name supported by hashlib can be passed.
+        
+    17      A different key_salt should be passed in for every application of HMAC.
+    18      """
+    19      if secret is None:
+    20          secret = settings.SECRET_KEY
+        
+    21      key_salt = force_bytes(key_salt)
+    22      secret = force_bytes(secret)
+    23      try:
+    24          hasher = getattr(hashlib, algorithm)
+    25      except AttributeError as e:
+    26          raise InvalidAlgorithm(
+    27              "%r is not an algorithm accepted by the hashlib module." % algorithm
+    28          ) from e
+    29      # We need to generate a derived key from our base key.  We can do this by
+    30      # passing the key_salt and our base key through a pseudo-random function.
+    31      key = hasher(key_salt + secret).digest()
+    32      # If len(key_salt + secret) > block size of the hash algorithm, the above
+    33      # line is redundant and could be replaced by key = key_salt + secret, since
+    34      # the hmac module does the same thing for keys longer than the block size.
+    35      # However, we need to ensure that we *always* do this.
+    36      return hmac.new(key, msg=force_bytes(value), digestmod=hasher)
+        
+        
+    37  RANDOM_STRING_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        
+        
+    38  def get_random_string(length, allowed_chars=RANDOM_STRING_CHARS):
+    39      """
+    40      Return a securely generated random string.
+        
+    41      The bit length of the returned value can be calculated with the formula:
+    42          log_2(len(allowed_chars)^length)
+        
+    43      For example, with default `allowed_chars` (26+26+10), this gives:
+    44        * length: 12, bit length =~ 71 bits
+    45        * length: 22, bit length =~ 131 bits
+    46      """
+    47      return "".join(secrets.choice(allowed_chars) for i in range(length))
+        
+        
+    48  def constant_time_compare(val1, val2):
+    49      """Return True if the two strings are equal, False otherwise."""
+    50      return secrets.compare_digest(force_bytes(val1), force_bytes(val2))
+        
+        
+    51  def pbkdf2(password, salt, iterations, dklen=0, digest=None):
+    52      """Return the hash of password using pbkdf2."""
+    53      if digest is None:
+    54          digest = hashlib.sha256
+    55      dklen = dklen or None
+    56      password = force_bytes(password)
+    57      salt = force_bytes(salt)
+    58      return hashlib.pbkdf2_hmac(digest().name, password, salt, iterations, dklen)
+
+
+----------------------------
+|MESSAGE(role="assistant", id=15)|
+I will open django/contrib/auth/__init__.py to inspect where get_session_auth_hash is stored/checked so I can make the minimal change needed to support SECRET_KEY_FALLBACKS for session validation.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+1
+----ARG----
+end_line
+320
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=16)|
+     1  import inspect
+     2  import re
+        
+     3  from django.apps import apps as django_apps
+     4  from django.conf import settings
+     5  from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+     6  from django.middleware.csrf import rotate_token
+     7  from django.utils.crypto import constant_time_compare
+     8  from django.utils.module_loading import import_string
+     9  from django.views.decorators.debug import sensitive_variables
+        
+    10  from .signals import user_logged_in, user_logged_out, user_login_failed
+        
+    11  SESSION_KEY = "_auth_user_id"
+    12  BACKEND_SESSION_KEY = "_auth_user_backend"
+    13  HASH_SESSION_KEY = "_auth_user_hash"
+    14  REDIRECT_FIELD_NAME = "next"
+        
+        
+    15  def load_backend(path):
+    16      return import_string(path)()
+        
+        
+    17  def _get_backends(return_tuples=False):
+    18      backends = []
+    19      for backend_path in settings.AUTHENTICATION_BACKENDS:
+    20          backend = load_backend(backend_path)
+    21          backends.append((backend, backend_path) if return_tuples else backend)
+    22      if not backends:
+    23          raise ImproperlyConfigured(
+    24              "No authentication backends have been defined. Does "
+    25              "AUTHENTICATION_BACKENDS contain anything?"
+    26          )
+    27      return backends
+        
+        
+    28  def get_backends():
+    29      return _get_backends(return_tuples=False)
+        
+        
+    30  @sensitive_variables("credentials")
+    31  def _clean_credentials(credentials):
+    32      """
+    33      Clean a dictionary of credentials of potentially sensitive info before
+    34      sending to less secure functions.
+        
+    35      Not comprehensive - intended for user_login_failed signal
+    36      """
+    37      SENSITIVE_CREDENTIALS = re.compile("api|token|key|secret|password|signature", re.I)
+    38      CLEANSED_SUBSTITUTE = "********************"
+    39      for key in credentials:
+    40          if SENSITIVE_CREDENTIALS.search(key):
+    41              credentials[key] = CLEANSED_SUBSTITUTE
+    42      return credentials
+        
+        
+    43  def _get_user_session_key(request):
+    44      # This value in the session is always serialized to a string, so we need
+    45      # to convert it back to Python whenever we access it.
+    46      return get_user_model()._meta.pk.to_python(request.session[SESSION_KEY])
+        
+        
+    47  @sensitive_variables("credentials")
+    48  def authenticate(request=None, **credentials):
+    49      """
+    50      If the given credentials are valid, return a User object.
+    51      """
+    52      for backend, backend_path in _get_backends(return_tuples=True):
+    53          backend_signature = inspect.signature(backend.authenticate)
+    54          try:
+    55              backend_signature.bind(request, **credentials)
+    56          except TypeError:
+    57              # This backend doesn't accept these credentials as arguments. Try
+    58              # the next one.
+    59              continue
+    60          try:
+    61              user = backend.authenticate(request, **credentials)
+    62          except PermissionDenied:
+    63              # This backend says to stop in our tracks - this user should not be
+    64              # allowed in at all.
+    65              break
+    66          if user is None:
+    67              continue
+    68          # Annotate the user object with the path of the backend.
+    69          user.backend = backend_path
+    70          return user
+        
+    71      # The credentials supplied are invalid to all backends, fire signal
+    72      user_login_failed.send(
+    73          sender=__name__, credentials=_clean_credentials(credentials), request=request
+    74      )
+        
+        
+    75  def login(request, user, backend=None):
+    76      """
+    77      Persist a user id and a backend in the request. This way a user doesn't
+    78      have to reauthenticate on every request. Note that data set during
+    79      the anonymous session is retained when the user logs in.
+    80      """
+    81      session_auth_hash = ""
+    82      if user is None:
+    83          user = request.user
+    84      if hasattr(user, "get_session_auth_hash"):
+    85          session_auth_hash = user.get_session_auth_hash()
+        
+    86      if SESSION_KEY in request.session:
+    87          if _get_user_session_key(request) != user.pk or (
+    88              session_auth_hash
+    89              and not constant_time_compare(
+    90                  request.session.get(HASH_SESSION_KEY, ""), session_auth_hash
+    91              )
+    92          ):
+    93              # To avoid reusing another user's session, create a new, empty
+    94              # session if the existing session corresponds to a different
+    95              # authenticated user.
+    96              request.session.flush()
+    97      else:
+    98          request.session.cycle_key()
+        
+    99      try:
+   100          backend = backend or user.backend
+   101      except AttributeError:
+   102          backends = _get_backends(return_tuples=True)
+   103          if len(backends) == 1:
+   104              _, backend = backends[0]
+   105          else:
+   106              raise ValueError(
+   107                  "You have multiple authentication backends configured and "
+   108                  "therefore must provide the `backend` argument or set the "
+   109                  "`backend` attribute on the user."
+   110              )
+   111      else:
+   112          if not isinstance(backend, str):
+   113              raise TypeError(
+   114                  "backend must be a dotted import path string (got %r)." % backend
+   115              )
+        
+   116      request.session[SESSION_KEY] = user._meta.pk.value_to_string(user)
+   117      request.session[BACKEND_SESSION_KEY] = backend
+   118      request.session[HASH_SESSION_KEY] = session_auth_hash
+   119      if hasattr(request, "user"):
+   120          request.user = user
+   121      rotate_token(request)
+   122      user_logged_in.send(sender=user.__class__, request=request, user=user)
+        
+        
+   123  def logout(request):
+   124      """
+   125      Remove the authenticated user's ID from the request and flush their session
+   126      data.
+   127      """
+   128      # Dispatch the signal before the user is logged out so the receivers have a
+   129      # chance to find out *who* logged out.
+   130      user = getattr(request, "user", None)
+   131      if not getattr(user, "is_authenticated", True):
+   132          user = None
+   133      user_logged_out.send(sender=user.__class__, request=request, user=user)
+   134      request.session.flush()
+   135      if hasattr(request, "user"):
+   136          from django.contrib.auth.models import AnonymousUser
+        
+   137          request.user = AnonymousUser()
+        
+        
+   138  def get_user_model():
+   139      """
+   140      Return the User model that is active in this project.
+   141      """
+   142      try:
+   143          return django_apps.get_model(settings.AUTH_USER_MODEL, require_ready=False)
+   144      except ValueError:
+   145          raise ImproperlyConfigured(
+   146              "AUTH_USER_MODEL must be of the form 'app_label.model_name'"
+   147          )
+   148      except LookupError:
+   149          raise ImproperlyConfigured(
+   150              "AUTH_USER_MODEL refers to model '%s' that has not been installed"
+   151              % settings.AUTH_USER_MODEL
+   152          )
+        
+        
+   153  def get_user(request):
+   154      """
+   155      Return the user model instance associated with the given request session.
+   156      If no user is retrieved, return an instance of `AnonymousUser`.
+   157      """
+   158      from .models import AnonymousUser
+        
+   159      user = None
+   160      try:
+   161          user_id = _get_user_session_key(request)
+   162          backend_path = request.session[BACKEND_SESSION_KEY]
+   163      except KeyError:
+   164          pass
+   165      else:
+   166          if backend_path in settings.AUTHENTICATION_BACKENDS:
+   167              backend = load_backend(backend_path)
+   168              user = backend.get_user(user_id)
+   169              # Verify the session
+   170              if hasattr(user, "get_session_auth_hash"):
+   171                  session_hash = request.session.get(HASH_SESSION_KEY)
+   172                  session_hash_verified = session_hash and constant_time_compare(
+   173                      session_hash, user.get_session_auth_hash()
+   174                  )
+   175                  if not session_hash_verified:
+   176                      request.session.flush()
+   177                      user = None
+        
+   178      return user or AnonymousUser()
+        
+        
+   179  def get_permission_codename(action, opts):
+   180      """
+   181      Return the codename of the permission for the specified action.
+   182      """
+   183      return "%s_%s" % (action, opts.model_name)
+        
+        
+   184  def update_session_auth_hash(request, user):
+   185      """
+   186      Updating a user's password logs out all sessions for the user.
+        
+   187      Take the current request and the updated user object from which the new
+   188      session hash will be derived and update the session hash appropriately to
+   189      prevent a password change from logging out the session from which the
+   190      password was changed.
+   191      """
+   192      request.session.cycle_key()
+   193      if hasattr(user, "get_session_auth_hash") and request.user == user:
+   194          request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()
+
+
+----------------------------
+|MESSAGE(role="assistant", id=17)|
+I'll check the file's indentation style before making a minimal targeted edit to the session verification logic in django/contrib/auth/__init__.py.
+----BEGIN_FUNCTION_CALL----
+detect_indentation
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=18)|
+4 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=19)|
+Make the session hash verification accept SECRET_KEY_FALLBACKS by replacing the single comparison with a loop that checks the current key and each fallback using salted_hmac. I'll perform a targeted find-and-replace in django/contrib/auth/__init__.py.
+
+----BEGIN_FUNCTION_CALL----
+find_and_replace_text
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+old_text
+            session_hash = request.session.get(HASH_SESSION_KEY)
+            session_hash_verified = session_hash and constant_time_compare(
+                session_hash, user.get_session_auth_hash()
+            )
+            if not session_hash_verified:
+                request.session.flush()
+                user = None
+----ARG----
+new_text
+            session_hash = request.session.get(HASH_SESSION_KEY)
+            # First check against the current SECRET_KEY via the user-provided method.
+            session_hash_verified = session_hash and constant_time_compare(
+                session_hash, user.get_session_auth_hash()
+            )
+            # If that fails, check against any SECRET_KEY_FALLBACKS.
+            if not session_hash_verified and session_hash:
+                from django.conf import settings as _settings
+                from django.utils.crypto import salted_hmac as _salted_hmac
+                key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+                for _secret in getattr(_settings, "SECRET_KEY_FALLBACKS", ()):
+                    if constant_time_compare(
+                        session_hash,
+                        _salted_hmac(key_salt, user.password, secret=_secret, algorithm="sha256").hexdigest(),
+                    ):
+                        session_hash_verified = True
+                        break
+            if not session_hash_verified:
+                request.session.flush()
+                user = None
+----ARG----
+count
+1
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=20)|
+Error: Text not found in django/contrib/auth/__init__.py. Make sure old_text matches EXACTLY (including all whitespace, indentation, and newlines).
+
+----------------------------
+|MESSAGE(role="assistant", id=21)|
+I'll re-open the exact lines around the session verification to capture the precise text for a safe, minimal replacement.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+160
+----ARG----
+end_line
+180
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=22)|
+   160          from django.contrib.auth.models import AnonymousUser
+        
+   161          request.user = AnonymousUser()
+        
+        
+   162  def get_user_model():
+   163      """
+   164      Return the User model that is active in this project.
+   165      """
+   166      try:
+   167          return django_apps.get_model(settings.AUTH_USER_MODEL, require_ready=False)
+   168      except ValueError:
+   169          raise ImproperlyConfigured(
+   170              "AUTH_USER_MODEL must be of the form 'app_label.model_name'"
+   171          )
+   172      except LookupError:
+   173          raise ImproperlyConfigured(
+   174              "AUTH_USER_MODEL refers to model '%s' that has not been installed"
+   175              % settings.AUTH_USER_MODEL
+   176          )
+        
+
+
+----------------------------
+|MESSAGE(role="assistant", id=23)|
+I'll search the auth __init__ file for the exact session verification lines so I can make a precise, minimal replacement.
+----BEGIN_FUNCTION_CALL----
+search_in_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+pattern
+session_hash_verified
+----ARG----
+use_regex
+False
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=24)|
+202:                session_hash_verified = session_hash and constant_time_compare(
+205:                if not session_hash_verified:
+
+
+----------------------------
+|MESSAGE(role="assistant", id=25)|
+I will display the exact lines around the session hash verification so I can perform a precise, minimal edit.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+192
+----ARG----
+end_line
+210
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=26)|
+   192          backend_path = request.session[BACKEND_SESSION_KEY]
+   193      except KeyError:
+   194          pass
+   195      else:
+   196          if backend_path in settings.AUTHENTICATION_BACKENDS:
+   197              backend = load_backend(backend_path)
+   198              user = backend.get_user(user_id)
+   199              # Verify the session
+   200              if hasattr(user, "get_session_auth_hash"):
+   201                  session_hash = request.session.get(HASH_SESSION_KEY)
+   202                  session_hash_verified = session_hash and constant_time_compare(
+   203                      session_hash, user.get_session_auth_hash()
+   204                  )
+   205                  if not session_hash_verified:
+   206                      request.session.flush()
+   207                      user = None
+        
+   208      return user or AnonymousUser()
+        
+
+
+----------------------------
+|MESSAGE(role="assistant", id=27)|
+I will replace the session verification block (lines 200–207) with a minimal edit that checks SECRET_KEY_FALLBACKS when the primary session hash check fails.
+
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+from_line
+200
+----ARG----
+to_line
+207
+----ARG----
+content
+              if hasattr(user, "get_session_auth_hash"):
+                  session_hash = request.session.get(HASH_SESSION_KEY)
+                  # First check against the current SECRET_KEY via the user-provided method.
+                  session_hash_verified = session_hash and constant_time_compare(
+                      session_hash, user.get_session_auth_hash()
+                  )
+                  # If that fails, check against any SECRET_KEY_FALLBACKS.
+                  if not session_hash_verified and session_hash:
+                      from django.utils.crypto import salted_hmac as _salted_hmac
+                      key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+                      for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+                          if constant_time_compare(
+                              session_hash,
+                              _salted_hmac(key_salt, user.password, secret=_secret, algorithm="sha256").hexdigest(),
+                          ):
+                              session_hash_verified = True
+                              break
+                  if not session_hash_verified:
+                      request.session.flush()
+                      user = None
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=28)|
+❌ EDIT REJECTED: Indentation mismatch detected in django/contrib/auth/__init__.py
+
+The new content's first line has 14 spaces of indentation,
+but surrounding code at line 199 has 12 spaces.
+
+This suggests a 2-space misalignment.
+
+Fix: Adjust indentation to match surrounding code (use show_file with highlight_whitespace=True)
+Expected indent: ~12 spaces, Got: 14 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=29)|
+I'll reopen the surrounding lines with whitespace highlighted to see the exact indentation so I can correct the replacement to match it precisely.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+194
+----ARG----
+end_line
+210
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=30)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···194          pass
+···195      else:
+···196          if backend_path in settings.AUTHENTICATION_BACKENDS:
+···197              backend = load_backend(backend_path)
+···198              user = backend.get_user(user_id)
+···199              # Verify the session
+···200                if hasattr(user, "get_session_auth_hash"):
+···201                    session_hash = request.session.get(HASH_SESSION_KEY)
+···202                    # First check against the current SECRET_KEY via the user-provided method.
+···203                    session_hash_verified = session_hash and constant_time_compare(
+···204                        session_hash, user.get_session_auth_hash()
+···205                    )
+···206                    # If that fails, check against any SECRET_KEY_FALLBACKS.
+···207                    if not session_hash_verified and session_hash:
+···208                        from django.utils.crypto import salted_hmac as _salted_hmac
+···209                        key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+···210                        for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+
+
+----------------------------
+|MESSAGE(role="assistant", id=31)|
+I will re-open lines 196–206 with whitespace highlighted to confirm the exact indentation before making the corrected replacement.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+196
+----ARG----
+end_line
+206
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=32)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···196          if backend_path in settings.AUTHENTICATION_BACKENDS:
+···197              backend = load_backend(backend_path)
+···198              user = backend.get_user(user_id)
+···199              # Verify the session
+···200                if hasattr(user, "get_session_auth_hash"):
+···201                    session_hash = request.session.get(HASH_SESSION_KEY)
+···202                    # First check against the current SECRET_KEY via the user-provided method.
+···203                    session_hash_verified = session_hash and constant_time_compare(
+···204                        session_hash, user.get_session_auth_hash()
+···205                    )
+···206                    # If that fails, check against any SECRET_KEY_FALLBACKS.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=33)|
+I'll replace the session verification block (lines 200–207) with a correctly-indented version that checks SECRET_KEY_FALLBACKS if the primary session hash check fails.
+
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+from_line
+200
+----ARG----
+to_line
+207
+----ARG----
+content
+              if hasattr(user, "get_session_auth_hash"):
+                  session_hash = request.session.get(HASH_SESSION_KEY)
+                  # First check against the current SECRET_KEY via the user-provided method.
+                  session_hash_verified = session_hash and constant_time_compare(
+                      session_hash, user.get_session_auth_hash()
+                  )
+                  # If that fails, check against any SECRET_KEY_FALLBACKS.
+                  if not session_hash_verified and session_hash:
+                      from django.utils.crypto import salted_hmac as _salted_hmac
+                      key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+                      for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+                          if constant_time_compare(
+                              session_hash,
+                              _salted_hmac(
+                                  key_salt,
+                                  user.password,
+                                  secret=_secret,
+                                  algorithm="sha256",
+                              ).hexdigest(),
+                          ):
+                              session_hash_verified = True
+                              break
+                  if not session_hash_verified:
+                      request.session.flush()
+                      user = None
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=34)|
+❌ EDIT REJECTED: Indentation mismatch detected in django/contrib/auth/__init__.py
+
+The new content's first line has 14 spaces of indentation,
+but surrounding code at line 199 has 12 spaces.
+
+This suggests a 2-space misalignment.
+
+Fix: Adjust indentation to match surrounding code (use show_file with highlight_whitespace=True)
+Expected indent: ~12 spaces, Got: 14 spaces
+
+----------------------------
+|MESSAGE(role="assistant", id=35)|
+I need to inspect the exact whitespace on lines 198–206 so I can construct a replacement that matches the file's indentation exactly.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+198
+----ARG----
+end_line
+206
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=36)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···198              user = backend.get_user(user_id)
+···199              # Verify the session
+···200                if hasattr(user, "get_session_auth_hash"):
+···201                    session_hash = request.session.get(HASH_SESSION_KEY)
+···202                    # First check against the current SECRET_KEY via the user-provided method.
+···203                    session_hash_verified = session_hash and constant_time_compare(
+···204                        session_hash, user.get_session_auth_hash()
+···205                    )
+···206                    # If that fails, check against any SECRET_KEY_FALLBACKS.
+
+
+----------------------------
+|MESSAGE(role="assistant", id=37)|
+Fixing the indentation mismatch and replacing the session verification block with a correctly indented version that checks SECRET_KEY_FALLBACKS when the primary session hash check fails.
+
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+from_line
+200
+----ARG----
+to_line
+207
+----ARG----
+content
+            if hasattr(user, "get_session_auth_hash"):
+                session_hash = request.session.get(HASH_SESSION_KEY)
+                # First check against the current SECRET_KEY via the user-provided method.
+                session_hash_verified = session_hash and constant_time_compare(
+                    session_hash, user.get_session_auth_hash()
+                )
+                # If that fails, check against any SECRET_KEY_FALLBACKS.
+                if not session_hash_verified and session_hash:
+                    from django.utils.crypto import salted_hmac as _salted_hmac
+                    key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+                    for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+                        if constant_time_compare(
+                            session_hash,
+                            _salted_hmac(
+                                key_salt,
+                                user.password,
+                                secret=_secret,
+                                algorithm="sha256",
+                            ).hexdigest(),
+                        ):
+                            session_hash_verified = True
+                            break
+                if not session_hash_verified:
+                    request.session.flush()
+                    user = None
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=38)|
+✓ Successfully replaced lines 200-207 in django/contrib/auth/__init__.py. Replaced 8 lines with 25 lines (net change: +17 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 277 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   200 - │               if hasattr(user, "get_session_auth_hash"):
+   200 + │             if hasattr(user, "get_session_auth_hash"): ⚠️INDENT
+   201 - │                   session_hash = request.session.get(HASH_SE…
+   201 + │                 session_hash = request.session.get(HASH_SESS… ⚠️INDENT
+   202 - │                   # First check against the current SECRET_K…
+   202 + │                 # First check against the current SECRET_KEY… ⚠️INDENT
+   203 - │                   session_hash_verified = session_hash and c…
+   203 + │                 session_hash_verified = session_hash and con… ⚠️INDENT
+   204 - │                       session_hash, user.get_session_auth_ha…
+   204 + │                     session_hash, user.get_session_auth_hash… ⚠️INDENT
+   205 - │                   )
+   205 + │                 ) ⚠️INDENT
+   206 - │                   # If that fails, check against any SECRET_…
+   206 + │                 # If that fails, check against any SECRET_KE… ⚠️INDENT
+   207 - │                   if not session_hash_verified and session_h…
+   207 + │                 if not session_hash_verified and session_has… ⚠️INDENT
+   208 + │                     from django.utils.crypto import salted_h… (ADDED) ⚠️INDENT
+   209 + │                     key_salt = "django.contrib.auth.models.A… (ADDED) ⚠️INDENT
+   210 + │                     for _secret in getattr(settings, "SECRET… (ADDED) ⚠️INDENT
+   211 + │                         if constant_time_compare( (ADDED) ⚠️INDENT
+   212 + │                             session_hash, (ADDED) ⚠️INDENT
+   213 + │                             _salted_hmac( (ADDED) ⚠️INDENT
+   214 + │                                 key_salt, (ADDED) ⚠️INDENT
+  ... (10 more lines not shown)
+──────────────────────────────────────────────────────────────────────
+
+Warning: syntax errors detected in django/contrib/auth/__init__.py:
+✗ Syntax error in django/contrib/auth/__init__.py:
+Sorry: IndentationError: unexpected indent (__init__.py, line 225)
+
+----------------------------
+|MESSAGE(role="assistant", id=39)|
+There’s an IndentationError reported at around line 225; I’ll display the surrounding lines with whitespace highlighted to diagnose the mismatch before fixing it.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+216
+----ARG----
+end_line
+236
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=40)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···216                                  secret=_secret,
+···217                                  algorithm="sha256",
+···218                              ).hexdigest(),
+···219                          ):
+···220                              session_hash_verified = True
+···221                              break
+···222                  if not session_hash_verified:
+···223                      request.session.flush()
+···224                      user = None
+···225                        from django.utils.crypto import salted_hmac as _salted_hmac
+···226                        key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+···227                        for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+···228                            if constant_time_compare(
+···229                                session_hash,
+···230                                _salted_hmac(
+···231                                    key_salt,
+···232                                    user.password,
+···233                                    secret=_secret,
+···234                                    algorithm="sha256",
+···235                                ).hexdigest(),
+···236                            ):
+
+
+----------------------------
+|MESSAGE(role="assistant", id=41)|
+The duplicate, incorrectly-indented fallback block (lines 225–236) is causing the IndentationError; I'll remove those extra lines to restore correct structure and then you can re-run checks.  
+----BEGIN_FUNCTION_CALL----
+delete_lines
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+from_line
+225
+----ARG----
+to_line
+236
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=42)|
+Successfully deleted lines 225-236 in django/contrib/auth/__init__.py
+
+Warning: syntax errors detected in django/contrib/auth/__init__.py:
+✗ Syntax error in django/contrib/auth/__init__.py:
+Sorry: IndentationError: unexpected indent (__init__.py, line 225)
+
+----------------------------
+|MESSAGE(role="assistant", id=43)|
+I'll display the surrounding lines with whitespace highlighted to locate the remaining unexpected indent and fix it next.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+208
+----ARG----
+end_line
+236
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=44)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···208                      from django.utils.crypto import salted_hmac as _salted_hmac
+···209                      key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+···210                      for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+···211                          if constant_time_compare(
+···212                              session_hash,
+···213                              _salted_hmac(
+···214                                  key_salt,
+···215                                  user.password,
+···216                                  secret=_secret,
+···217                                  algorithm="sha256",
+···218                              ).hexdigest(),
+···219                          ):
+···220                              session_hash_verified = True
+···221                              break
+···222                  if not session_hash_verified:
+···223                      request.session.flush()
+···224                      user = None
+···225                                session_hash_verified = True
+···226                                break
+···227                    if not session_hash_verified:
+···228                        request.session.flush()
+···229                        user = None
+···230                        from django.utils.crypto import salted_hmac as _salted_hmac
+···231                        key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+···232                        for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+···233                            if constant_time_compare(
+···234                                session_hash,
+···235                                _salted_hmac(key_salt, user.password, secret=_secret, algorithm="sha256").hexdigest(),
+···236                            ):
+
+
+----------------------------
+|MESSAGE(role="assistant", id=45)|
+There are still duplicated and misindented lines further down; I'll show the next section with whitespace highlighted to locate exactly what to remove/fix.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+236
+----ARG----
+end_line
+300
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=46)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···236                            ):
+···237                                session_hash_verified = True
+···238                                break
+···239                    if not session_hash_verified:
+···240                        request.session.flush()
+···241                        user = None
+········
+···242      return user or AnonymousUser()
+········
+········
+···243  def get_permission_codename(action, opts):
+···244      """
+···245      Return the codename of the permission for the specified action.
+···246      """
+···247      return "%s_%s" % (action, opts.model_name)
+········
+········
+···248  def update_session_auth_hash(request, user):
+···249      """
+···250      Updating a user's password logs out all sessions for the user.
+········
+···251      Take the current request and the updated user object from which the new
+···252      session hash will be derived and update the session hash appropriately to
+···253      prevent a password change from logging out the session from which the
+···254      password was changed.
+···255      """
+···256      request.session.cycle_key()
+···257      if hasattr(user, "get_session_auth_hash") and request.user == user:
+···258          request.session[HASH_SESSION_KEY] = user.get_session_auth_hash()
+
+
+----------------------------
+|MESSAGE(role="assistant", id=47)|
+I will run the repository verification checks (syntax, modified files, and git diff) before finishing.  
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=48)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 34
+   Lines deleted: 0
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+❌ CHECK 3 FAILED: Syntax errors detected
+   ✗ Syntax errors detected:
+
+django/contrib/auth/__init__.py:
+✗ Syntax error in django/contrib/auth/__init__.py:
+Sorry: IndentationError: unexpected indent (__init__.py, line 225)
+
+   FIX THESE ERRORS before calling finish()!
+⚠️  CHECK 4 WARNING: 1 file(s) have minor static analysis warnings
+   (Consider reviewing, but not blocking)
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/django/contrib/auth/__init__.py b/django/contrib/auth/__init__.py
+index 155330c596..cc4ad2ec1f 100644
+--- a/django/contrib/auth/__init__.py
++++ b/django/contrib/auth/__init__.py
+@@ -199,12 +199,46 @@ def get_user(request):
+             # Verify the session
+             if hasattr(user, "get_session_auth_hash"):
+                 session_hash = request.session.get(HASH_SESSION_KEY)
++                # First check against the current SECRET_KEY via the user-provided method.
+                 session_hash_verified = session_hash and constant_time_compare(
+                     session_hash, user.get_session_auth_hash()
+                 )
++                # If that fails, check against any SECRET_KEY_FALLBACKS.
++                if not session_hash_verified and session_hash:
++                    from django.utils.crypto import salted_hmac as _salted_hmac
++                    key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
++                    for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
++                        if constant_time_compare(
++                            session_hash,
++                            _salted_hmac(
++                                key_salt,
++                                user.password,
++                                secret=_secret,
++                                algorithm="sha256",
++                            ).hexdigest(),
++                        ):
++                            session_hash_verified = True
++                            break
+                 if not session_hash_verified:
+                     request.session.flush()
+                     user = None
++                              session_hash_verified = True
++                              break
++                  if not session_hash_verified:
++                      request.session.flush()
++                      user = None
++                      from django.utils.crypto import salted_hmac as _salted_hmac
++                      key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
++                      for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
++                          if constant_time_compare(
++                              session_hash,
++                              _salted_hmac(key_salt, user.password, secret=_secret, algorithm="sha256").hexdigest(),
++                          ):
++                              session_hash_verified = True
++                              break
++                  if not session_hash_verified:
++                      request.session.flush()
++                      user = None
+ 
+     return user or AnonymousUser()
+
+============================================================
+❌ VERIFICATION FAILED - DO NOT call finish() yet
+============================================================
+
+Fix the issues above, then run verify_before_finish() again.
+
+----------------------------
+|MESSAGE(role="assistant", id=49)|
+I'll inspect the edited region with whitespace highlighted to identify and remove the duplicated/misaligned lines.  
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+188
+----ARG----
+end_line
+244
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=50)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+········
+···188      user = None
+···189      try:
+···190          user_id = _get_user_session_key(request)
+···191          backend_path = request.session[BACKEND_SESSION_KEY]
+···192      except KeyError:
+···193          pass
+···194      else:
+···195          if backend_path in settings.AUTHENTICATION_BACKENDS:
+···196              backend = load_backend(backend_path)
+···197              user = backend.get_user(user_id)
+···198              # Verify the session
+···199              if hasattr(user, "get_session_auth_hash"):
+···200                  session_hash = request.session.get(HASH_SESSION_KEY)
+···201                  # First check against the current SECRET_KEY via the user-provided method.
+···202                  session_hash_verified = session_hash and constant_time_compare(
+···203                      session_hash, user.get_session_auth_hash()
+···204                  )
+···205                  # If that fails, check against any SECRET_KEY_FALLBACKS.
+···206                  if not session_hash_verified and session_hash:
+···207                      from django.utils.crypto import salted_hmac as _salted_hmac
+···208                      key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+···209                      for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+···210                          if constant_time_compare(
+···211                              session_hash,
+···212                              _salted_hmac(
+···213                                  key_salt,
+···214                                  user.password,
+···215                                  secret=_secret,
+···216                                  algorithm="sha256",
+···217                              ).hexdigest(),
+···218                          ):
+···219                              session_hash_verified = True
+···220                              break
+···221                  if not session_hash_verified:
+···222                      request.session.flush()
+···223                      user = None
+···224                                session_hash_verified = True
+···225                                break
+···226                    if not session_hash_verified:
+···227                        request.session.flush()
+···228                        user = None
+···229                        from django.utils.crypto import salted_hmac as _salted_hmac
+···230                        key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
+···231                        for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
+···232                            if constant_time_compare(
+···233                                session_hash,
+···234                                _salted_hmac(key_salt, user.password, secret=_secret, algorithm="sha256").hexdigest(),
+···235                            ):
+···236                                session_hash_verified = True
+···237                                break
+···238                    if not session_hash_verified:
+···239                        request.session.flush()
+···240                        user = None
+········
+···241      return user or AnonymousUser()
+········
+
+
+----------------------------
+|MESSAGE(role="assistant", id=51)|
+There are duplicated, mis-indented lines after the valid session-flush block; I'll remove the extra lines 224–240 to restore correct structure and fix the IndentationError.
+
+----BEGIN_FUNCTION_CALL----
+delete_lines
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+from_line
+224
+----ARG----
+to_line
+240
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=52)|
+Successfully deleted lines 224-240 in django/contrib/auth/__init__.py
+
+Warning: syntax errors detected in django/contrib/auth/__init__.py:
+✗ Syntax error in django/contrib/auth/__init__.py:
+Sorry: IndentationError: unexpected indent (__init__.py, line 224)
+
+----------------------------
+|MESSAGE(role="assistant", id=53)|
+I will display the surrounding lines with whitespace highlighted to find the remaining unexpected indent and fix it next.
+----BEGIN_FUNCTION_CALL----
+show_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+start_line
+212
+----ARG----
+end_line
+228
+----ARG----
+highlight_whitespace
+True
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=54)|
+WHITESPACE HIGHLIGHTED (· = space, → = tab):
+···212                              session_hash,
+···213                              _salted_hmac(
+···214                                  key_salt,
+···215                                  user.password,
+···216                                  secret=_secret,
+···217                                  algorithm="sha256",
+···218                              ).hexdigest(),
+···219                          ):
+···220                              session_hash_verified = True
+···221                              break
+···222                  if not session_hash_verified:
+···223                      request.session.flush()
+···224                        user = None
+········
+···225      return user or AnonymousUser()
+········
+········
+
+
+----------------------------
+|MESSAGE(role="assistant", id=55)|
+I'll fix the mis-indented lines 222–224 by replacing them with a correctly indented flush block.
+
+----BEGIN_FUNCTION_CALL----
+replace_in_file
+----ARG----
+file_path
+django/contrib/auth/__init__.py
+----ARG----
+from_line
+222
+----ARG----
+to_line
+224
+----ARG----
+content
+                    if not session_hash_verified:
+                        request.session.flush()
+                        user = None
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=56)|
+✓ Successfully replaced lines 222-224 in django/contrib/auth/__init__.py. Replaced 3 lines with 3 lines (net change: +0 lines).
+⚠️  IMPORTANT: Line numbers have changed! You must re-read the file before the next edit.
+The new file has approximately 248 total lines.
+
+VISUAL DIFF (before → after):
+──────────────────────────────────────────────────────────────────────
+   222 - │                 if not session_hash_verified:
+   222 + │                     if not session_hash_verified: ⚠️INDENT
+   223 - │                     request.session.flush()
+   223 + │                         request.session.flush() ⚠️INDENT
+   224 - │                       user = None
+   224 + │                         user = None ⚠️INDENT
+──────────────────────────────────────────────────────────────────────
+
+----------------------------
+|MESSAGE(role="assistant", id=57)|
+Run the verification checks again to ensure the indentation/syntax errors are resolved and the changes are valid.
+----BEGIN_FUNCTION_CALL----
+verify_before_finish
+----END_FUNCTION_CALL----
+
+----------------------------
+|MESSAGE(role="tool", id=58)|
+============================================================
+PRE-FINISH VERIFICATION CHECKLIST
+============================================================
+
+✅ CHECK 1 PASSED: Code changes detected
+   Lines added: 20
+   Lines deleted: 3
+
+✅ CHECK 2 PASSED: Modified 1 source file(s)
+
+✅ CHECK 3 PASSED: ✓ All checked Python files have valid syntax
+
+✅ CHECK 4 PASSED: No semantic errors detected in Python files
+
+============================================================
+GIT DIFF PREVIEW (first 1000 chars):
+============================================================
+diff --git a/django/contrib/auth/__init__.py b/django/contrib/auth/__init__.py
+index 155330c596..05ddb6ff62 100644
+--- a/django/contrib/auth/__init__.py
++++ b/django/contrib/auth/__init__.py
+@@ -199,12 +199,29 @@ def get_user(request):
+             # Verify the session
+             if hasattr(user, "get_session_auth_hash"):
+                 session_hash = request.session.get(HASH_SESSION_KEY)
++                # First check against the current SECRET_KEY via the user-provided method.
+                 session_hash_verified = session_hash and constant_time_compare(
+                     session_hash, user.get_session_auth_hash()
+                 )
+-                if not session_hash_verified:
+-                    request.session.flush()
+-                    user = None
++                # If that fails, check against any SECRET_KEY_FALLBACKS.
++                if not session_hash_verified and session_hash:
++                    from django.utils.crypto import salted_hmac as _salted_hmac
++                    key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
++                    for _secret in getattr(settings, "SECRET_KEY_FALLBACKS", ()):
++                        if constant_time_compare(
++                            session_hash,
++                            _salted_hmac(
++                                key_salt,
++                                user.password,
++                                secret=_secret,
++                                algorithm="sha256",
++                            ).hexdigest(),
++                        ):
++                            session_hash_verified = True
++                            break
++                    if not session_hash_verified:
++                        request.session.flush()
++                        user = None
+ 
+     return user or AnonymousUser()
+
+============================================================
+✅ ALL CHECKS PASSED - Safe to call finish()
+============================================================
+
+Final reminders before calling finish():
+  • Review the diff above - does it match the task?
+  • Are you modifying the RIGHT files (not test files)?
+  • Is indentation correct (no misaligned code)?
+  • Did you preserve imports and critical code?
+
+If all looks good, call: finish('your summary here')
+
